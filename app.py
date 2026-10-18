@@ -36,27 +36,40 @@ CYRILLIC_TO_LATIN = {
 }
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])(\b|[.)\s]|$)")
 
-# --- Deep Subcategories to Prevent Repetition ---
+# Deep pools of specialized topics
 TOPIC_POOLS = [
-    "O'zbekiston tarixi (Amir Temur, Boburiylar, Xorazmshohlar davri)",
-    "O'zbekiston tarixi (Jadidchilik, 20-asr fojialari, mustaqillik yillari)",
-    "Jahon tarixi (Qadimgi Misr, Qadimgi Yunoniston, Rim imperiyasi)",
-    "Jahon tarixi (O'rta asrlar, Buyuk geografik kashfiyotlar, Renessans)",
-    "Astronomiya (Quyosh tizimi, ekzosayyoralar, qora tuynuklar)",
-    "Kosmonavtika (Mashhur fazogirlar, Apollo va Mars missiyalari)",
-    "Kimyo (Elementlar davriy jadvali, nodir metallar, nometallar)",
-    "Fizika (Kvant mexanikasi, nisbiylik nazariyasi, kashfiyotchilar)",
-    "Biologiya (Inson anatomiyasi, genlar, miya va yurak faoliyati)",
-    "Zoologiya (Nodir va xavfli hayvonlar, qiziqarli biologik faktlar)",
-    "Geografiya (Dunyo poytaxtlari, dengizlar, bo'g'ozlar, vulqonlar)",
-    "Axborot texnologiyalari (Kompyuter tarixi, dasturlash asoslari, AI)",
-    "O'zbek adabiyoti (Alisher Navoiy, Abdulla Qodiriy, Cho'lpon asarlari)",
-    "Jahon adabiyoti (Klassik romanlar, Nobel mukofoti sohiblari)",
-    "Mantiq va Deduksiya (Chalg'ituvchi va chuqur fikrlashni talab qiluvchi savollar)"
+    "O'zbekiston tarixi: Qadimgi Baqtriya, So'g'diyona va Kushon imperiyasi",
+    "O'zbekiston tarixi: Somoniylar, Qoraxoniylar va Xorazmshohlar davlati",
+    "O'zbekiston tarixi: Amir Temur harbiy yurishlari va diplomatik aloqalari",
+    "O'zbekiston tarixi: Turkiston jadidchilik harakati va 20-asr fojialari",
+    "Jahon tarixi: Qadimgi Mesopotamiya, Bobil va Finikiya sivilizatsiyasi",
+    "Jahon tarixi: Qadimgi Rim senati, imperatorlari va muhim janglari",
+    "Jahon tarixi: O'rta asrlar Yevropasi, Salib yurishlari va feodalizm",
+    "Jahon tarixi: Birinchi va Ikkinchi jahon urushidagi kam ma'lum burilish nuqtalari",
+    "Astronomiya: Ekzosayyoralar, neytron yulduzlar va pulsar hodisalari",
+    "Astronomiya: Galaktikalar to'qnashuvi, relyikt nurlanish va qora tuynuklar",
+    "Kosmonavtika: Mashhur kosmik zondlar (Voyager, Cassini, New Horizons) missiyalari",
+    "Fizika: Nisbiylik nazariyasi, optik illyuziyalar va yorug'lik tabiati",
+    "Fizika: Termodinamika qonunlari va zamonaviy kvant kashfiyotlari",
+    "Kimyo: Davriy jadvaldagi radioaktiv elementlar va ularning ishlatilishi",
+    "Kimyo: Kundalik hayotdagi g'aroyib kimyoviy reaksiyalar va qotishmalar",
+    "Inson biologiyasi: Neyronlar, gormonlar, miya tuzilishi va qon aylanishi",
+    "Biologiya va Zoologiya: Dengiz tubi (Abissal) mavjudotlari va ularning moslashuvi",
+    "Biologiya va Botanika: Dunyodagi eng zaharli, kamyob va qadimgi o'simliklar",
+    "Geografiya: Dengizga chiqish yo'li yo'q davlatlar, kutilmagan eksklavlar va chegaralar",
+    "Geografiya: Dunyodagi eng xavfli vulqonlar, chuqur botqoqliklar va tektonik yoriqlar",
+    "Texnologiya va Kiberxavfsizlik: Internet protokollari, kriptografiya va kompyuter tarixi",
+    "Adabiyot va Falsafa: Antik davr faylasuflari (Suqrot, Aflotun) va Sharq donishmandlari",
+    "Mantiq va Deduksiya: Detektiv uslubidagi faktlar va chalkash mantiqiy masalalar"
 ]
 
-# Track asked questions in memory during uptime
-seen_questions = set()
+QUESTION_ANGLES = [
+    "Kutilmagan, ko'pchilik noto'g'ri taxmin qiladigan paradoksal fakt",
+    "Aniq bir kashfiyot yoki tarixiy burilish ortida turgan shaxs",
+    "Hodisaning sabab-oqibat mexanizmi",
+    "Atamaning yoki nomning kelib chiqish tarixi (etimologiyasi)",
+    "Noodatiy, kamchilik biladigan statistik yoki ilmiy qonuniyat"
+]
 
 round_state = {
     "active": False,
@@ -84,83 +97,7 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
     server.serve_forever()
 
-# --- Question Generator with Anti-Repetition ---
-def fetch_question(q_num):
-    global seen_questions
-    
-    # Try up to 3 times to get a completely unique question
-    for attempt in range(3):
-        chosen_topic = random.choice(TOPIC_POOLS)
-        cache_buster = f"{int(time.time())}_{random.randint(1000, 9999)}"
-        
-        prompt = f"""
-        Sen Telegram intellektual viktorinasi uchun maxsus savol tuzuvchisan.
-        Savol raqami: #{q_num} / 1 000 000.
-        Mavzu: {chosen_topic}.
-        Unikal kalit: {cache_buster}.
-        
-        QOIDALAR:
-        1. Savol o'ta original va faktik jihatdan 100% aniq bo'lsin.
-        2. Eng keng tarqalgan, ibtidoiy savollarni (masalan: "Eng katta okean qaysi?" yoki "Quyoshga eng yaqin sayyora") BERMA.
-        3. Qiyinlik: o'rta yoki qiyin, do'stlar o'rtasida qizg'in bahs uyg'otadigan savol bo'lsin.
-        
-        Quyidagi JSON formatida to'g'ridan-to'g'ri qaytar (hech qanday markdown blokisiz):
-        {{
-            "subject": "{chosen_topic.split('(')[0].strip()}",
-            "question": "Savol matni o'zbek tilida",
-            "options": {{"A": "Variant 1", "B": "Variant 2", "C": "Variant 3", "D": "Variant 4"}},
-            "correct": "A",
-            "explanation": "Qisqa va aniq ilmiy/tarixiy tushuntirish (1-2 gap)"
-        }}
-        """
-        try:
-            res = requests.post(
-                GEMINI_URL,
-                json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"response_mime_type": "application/json"}},
-                timeout=12
-            )
-            data = res.json()
-            if "error" in data:
-                logger.error(f"Google API Error: {data['error'].get('message')}")
-                raise ValueError(data['error'].get('message'))
-                
-            raw_json = data['candidates'][0]['content']['parts'][0]['text']
-            parsed = json.loads(raw_json)
-            
-            q_text = parsed.get("question", "").strip()
-            # Check if this question was already used recently
-            if q_text not in seen_questions:
-                seen_questions.add(q_text)
-                if len(seen_questions) > 500:
-                    seen_questions.pop()
-                return parsed
-            else:
-                logger.info(f"Duplicate detected: '{q_text}', regenerating...")
-        except Exception as e:
-            logger.warning(f"Gemini API attempt {attempt+1} failed: {e}")
-            time.sleep(1)
-
-    # Secondary fallback only if Google is completely unreachable
-    return {
-        "subject": "Tarix",
-        "question": "Sohibqiron Amir Temurning suyukli rafiqasi Saroymulkxonim (Bibixonim) kimning qizi bo'lgan?",
-        "options": {"A": "Qozonxon", "B": "Kebekxon", "C": "Chig'atoyxon", "D": "To'xtamishxon"},
-        "correct": "A",
-        "explanation": "Saroymulkxonim Chig'atoy ulusi xoni Qozonxonning qizi bo'lgan."
-    }
-
-# --- Pinned Leaderboard & Formatting Helpers ---
-def format_leaderboard_text(scores_dict):
-    if not scores_dict:
-        return "— Hozircha ballar yo‘q —"
-    sorted_scores = sorted(scores_dict.items(), key=lambda x: x[1], reverse=True)
-    medals = ["🥇", "🥈", "🥉"]
-    lines = []
-    for idx, (name, pts) in enumerate(sorted_scores, start=1):
-        prefix = medals[idx-1] if idx <= 3 else f"{idx}."
-        lines.append(f"{prefix} {name} — {pts} ball")
-    return "\n".join(lines)
-
+# --- Pinned Message Parsing (Scores + Question History) ---
 async def get_or_create_leaderboard(bot):
     chat = await bot.get_chat(GROUP_CHAT_ID)
     pinned = chat.pinned_message
@@ -172,63 +109,170 @@ async def get_or_create_leaderboard(bot):
     init_text = (
         "🏆 1 MILLION QUESTIONS · YETAKCHILAR JADVALI\n"
         "Joriy savol: #0000001\n\n"
-        "— Hozircha ballar yo‘q —"
+        "— Hozircha ballar yo‘q —\n\n"
+        "────────────────────\n"
+        "📜 So‘nggi savollar tarixi:\n"
+        "• Savollar boshlanmoqda..."
     )
     msg = await bot.send_message(GROUP_CHAT_ID, init_text)
     try:
         await bot.pin_chat_message(GROUP_CHAT_ID, msg.message_id)
     except Exception as e:
-        logger.error(f"Could not pin leaderboard message: {e}")
+        logger.error(f"Could not pin leaderboard: {e}")
     return msg
 
-async def update_score_in_pin(bot, winner_name, points=10):
-    try:
-        pin = await get_or_create_leaderboard(bot)
-        text = getattr(pin, "text", "") or ""
+def parse_pin_data(pin_text):
+    """Extracts scores, current question count, and recent questions history."""
+    q_match = re.search(r"Joriy savol: #(\d+)", pin_text)
+    current_q = int(q_match.group(1)) if q_match else 1
+    
+    scores = {}
+    history = []
+    
+    is_history_section = False
+    for line in pin_text.split("\n"):
+        line = line.strip()
+        if "So‘nggi savollar tarixi:" in line:
+            is_history_section = True
+            continue
         
-        q_match = re.search(r"Joriy savol: #(\d+)", text)
-        current_q = int(q_match.group(1)) + 1 if q_match else 1
-        
-        scores = {}
-        for line in text.split("\n"):
-            m = re.match(r"^[🥇🥈🥉\d.]+\s*(.+?)\s*—\s*(\d+)\s*ball", line.strip())
+        if not is_history_section:
+            m = re.match(r"^[🥇🥈🥉\d.]+\s*(.+?)\s*—\s*(\d+)\s*ball", line)
             if m:
                 scores[m.group(1)] = int(m.group(2))
-            else:
-                m_old = re.match(r"^• (.+?): (\d+) ball", line.strip())
-                if m_old:
-                    scores[m_old.group(1)] = int(m_old.group(2))
+        else:
+            if line.startswith("•") and not "boshlanmoqda" in line:
+                history.append(line.replace("•", "").strip())
                 
-        scores[winner_name] = scores.get(winner_name, 0) + points
-        body = format_leaderboard_text(scores)
+    return current_q, scores, history
+
+async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
+    try:
+        pin = await get_or_create_leaderboard(bot)
+        _, _, history = parse_pin_data(getattr(pin, "text", "") or "")
+        
+        if new_question_summary:
+            clean_summary = new_question_summary.replace("\n", " ").strip()[:90]
+            history.insert(0, clean_summary)
+            history = history[:15]  # Keep last 15 questions in memory
+            
+        # Format scores
+        if scores_dict:
+            sorted_scores = sorted(scores_dict.items(), key=lambda x: x[1], reverse=True)
+            medals = ["🥇", "🥈", "🥉"]
+            score_lines = []
+            for idx, (name, pts) in enumerate(sorted_scores, start=1):
+                prefix = medals[idx-1] if idx <= 3 else f"{idx}."
+                score_lines.append(f"{prefix} {name} — {pts} ball")
+            scores_body = "\n".join(score_lines)
+        else:
+            scores_body = "— Hozircha ballar yo‘q —"
+            
+        # Format history
+        history_lines = [f"• {item}" for item in history] if history else ["• Savollar tarixi boshlanmoqda..."]
+        history_body = "\n".join(history_lines)
         
         new_text = (
             f"🏆 1 MILLION QUESTIONS · YETAKCHILAR JADVALI\n"
-            f"Joriy savol: #{current_q:07d}\n\n"
-            f"{body}"
+            f"Joriy savol: #{next_q_num:07d}\n\n"
+            f"{scores_body}\n\n"
+            f"────────────────────\n"
+            f"📜 So‘nggi savollar tarixi:\n"
+            f"{history_body}"
         )
         await bot.edit_message_text(chat_id=GROUP_CHAT_ID, message_id=pin.message_id, text=new_text)
-        return body
+        return scores_body
     except Exception as e:
-        logger.error(f"Failed to update pinned message: {e}")
+        logger.error(f"Failed to update pin: {e}")
         return ""
+
+# --- Question Generator with History Memory & High Temperature ---
+def fetch_question(q_num, recent_history):
+    chosen_topic = random.choice(TOPIC_POOLS)
+    chosen_angle = random.choice(QUESTION_ANGLES)
+    cache_buster = f"{int(time.time())}_{random.randint(1000, 9999)}"
+    
+    history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "Hozircha yo'q"
+
+    prompt = f"""
+    Sen Telegram viktorinasi uchun ORIGINAL va TAKRORLANMAS savol tuzuvchisan.
+    Hozirgi savol raqami: #{q_num} / 1 000 000.
+    Tasodifiy kalit: {cache_buster}.
+    
+    MAVZU: {chosen_topic}
+    YONDASHUV USLUBI: {chosen_angle}
+    
+    QAT'IY QOIDALAR (BUZILMASIN):
+    1. QUYIDAGI YAQUNDA BERILGAN SAVOLLARNI VA ULARNING MAVZUSINI MUTLAQO TAKRORLAMA:
+    {history_block}
+    
+    2. ENG SODDA VA O'TA MASHHUR SAVOLLARNI ASLO BERMA:
+       - Quyoshga eng yaqin sayyora (Merkuriy)
+       - Xona haroratidagi suyuq metall yoki nometall (Simob, Brom)
+       - Eng baland tog' (Everest), eng chuqur ko'l (Baykal), eng katta okean
+       - Alisher Navoiy Hamsasi nechta doston, Amir Temur qachon tug'ilgan
+       - Inson tanasidagi eng katta suyak yoki a'zo
+       Bunday qolipli savollar taqiqlangan!
+       
+    3. Savol aqlli, qiziqarli, o'rta yoki qiyin darajada bo'lsin.
+    4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
+    
+    Faqat quyidagi JSON formatida to'g'ridan-to'g'ri javob ber (hech qanday markdown bloklarisiz):
+    {{
+        "subject": "{chosen_topic.split(':')[0].strip()}",
+        "question": "Savol matni o'zbek tilida",
+        "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
+        "correct": "A",
+        "explanation": "Qisqa ilmiy/tarixiy faktli tushuntirish (1-2 gap)"
+    }}
+    """
+    
+    try:
+        res = requests.post(
+            GEMINI_URL,
+            json={
+                "contents": [{"parts": [{"text": prompt}]}],
+                "generationConfig": {
+                    "response_mime_type": "application/json",
+                    "temperature": 1.15,
+                    "top_p": 0.95
+                }
+            },
+            timeout=12
+        )
+        data = res.json()
+        if "error" in data:
+            logger.error(f"Google API Error: {data['error'].get('message')}")
+            raise ValueError(data['error'].get('message'))
+            
+        raw_json = data['candidates'][0]['content']['parts'][0]['text']
+        return json.loads(raw_json)
+    except Exception as e:
+        logger.warning(f"Gemini API request failed: {e}")
+        # Varied dynamic fallback
+        return {
+            "subject": "Tarix",
+            "question": "1402-yilgi Anqara jangida Amir Temur qo'shinida qaysi hayvonlardan jangovar qurol sifatida foydalanilgan?",
+            "options": {"A": "Jangovar fillar", "B": "Otliq tuyalar", "C": "Burgutlar", "D": "Qoplonlar"},
+            "correct": "A",
+            "explanation": "Amir Temur Hindiston yurishida qo'lga kiritgan maxsus himoyalangan jangovar fillardan Boyazidga qarshi foydalangan."
+        }
 
 # --- Round Engine ---
 async def post_hourly_question(app):
     global round_state
     
     pin = await get_or_create_leaderboard(app.bot)
-    pin_text = getattr(pin, "text", "") or ""
-    q_match = re.search(r"Joriy savol: #(\d+)", pin_text)
-    q_num = int(q_match.group(1)) if q_match else 1
+    q_num, scores, history = parse_pin_data(getattr(pin, "text", "") or "")
     
-    data = fetch_question(q_num)
+    data = fetch_question(q_num, history)
     
     round_state["active"] = True
     round_state["q_num"] = q_num
     round_state["correct"] = data["correct"].upper()
     round_state["options"] = data["options"]
     round_state["explanation"] = data["explanation"]
+    round_state["question_text"] = data["question"]
     round_state["attempted_users"].clear()
     
     msg_text = (
@@ -239,10 +283,10 @@ async def post_hourly_question(app):
         f"B) {data['options']['B']}\n"
         f"C) {data['options']['C']}\n"
         f"D) {data['options']['D']}\n\n"
-        f"⚡ To‘g‘ri variant harfini yozing (A, B, C yoki D)! Bir kishiga 1 ta urinish."
+        f"⚡ To‘g‘ri variant harfini yozing (A, B, C yoki D)! Har bir kishiga 1 ta urinish."
     )
     await app.bot.send_message(GROUP_CHAT_ID, msg_text)
-    logger.info(f"Question #{q_num} posted. Correct answer: {round_state['correct']}")
+    logger.info(f"Question #{q_num} posted. Correct: {round_state['correct']}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global round_state
@@ -269,15 +313,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     round_state["attempted_users"].add(user.id)
     raw_choice = match.group(1)
     choice = CYRILLIC_TO_LATIN.get(raw_choice, raw_choice).upper()
-    logger.info(f"User {user.first_name} guessed: {choice} (Correct: {round_state['correct']})")
 
     try:
         if choice == round_state["correct"]:
             round_state["active"] = False
             winner_name = user.first_name or "O‘yinchi"
             
-            # Update pin and return the live updated standings table
-            leaderboard_str = await update_score_in_pin(context.bot, winner_name, points=10)
+            # Read current pin data, calculate next question number & new score
+            pin = await get_or_create_leaderboard(context.bot)
+            q_num, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
+            scores[winner_name] = scores.get(winner_name, 0) + 10
+            
+            # Save question into the persistent history inside the pinned message
+            leaderboard_str = await update_pin(
+                context.bot,
+                next_q_num=q_num + 1,
+                scores_dict=scores,
+                new_question_summary=round_state["question_text"]
+            )
             
             correct_letter = round_state["correct"]
             ans_text = round_state["options"].get(correct_letter, "")
@@ -307,7 +360,7 @@ async def scheduler(app):
     while True:
         now = datetime.now(TASHKENT_TZ)
         seconds_to_wait = (60 - now.minute - 1) * 60 + (60 - now.second)
-        logger.info(f"Next question scheduled in {seconds_to_wait} seconds.")
+        logger.info(f"Next question in {seconds_to_wait}s.")
         await asyncio.sleep(seconds_to_wait)
         await post_hourly_question(app)
         await asyncio.sleep(5)
