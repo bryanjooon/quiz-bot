@@ -24,8 +24,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROUP_CHAT_ID = int(os.getenv("TELEGRAM_GROUP_ID"))
 PORT = int(os.environ.get("PORT", 10000))
 TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
-
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
 CYRILLIC_TO_LATIN = {
     'А': 'A', 'а': 'A',
     'В': 'B', 'в': 'B',
@@ -62,8 +61,9 @@ def run_web_server():
 # --- Question Generator ---
 def fetch_question(q_num):
     prompt = f"""
-    Telegram viktorinasi uchun savol tuz. Savol raqami: {q_num}/1000000.
-    Fanlar: Tarix, Geografiya, Astronomiya, Fan-texnika, Biologiya, Mantiq.
+    Telegram viktorinasi uchun tasodifiy mavzuda savol tuz. Savol raqami: {q_num}/1000000.
+    Fanlar: O'zbekiston tarixi, Jahon tarixi, Geografiya, Astronomiya, Fan-texnika, Biologiya, Kimyo, Mantiq.
+    Har gal har xil qiziqarli fan va savol tanla.
     Faqat to'g'ridan-to'g'ri JSON formatda qaytar:
     {{
         "subject": "Fan",
@@ -80,6 +80,10 @@ def fetch_question(q_num):
             timeout=10
         )
         data = res.json()
+        if "error" in data:
+            logger.error(f"Google API Error: {data['error'].get('message')}")
+            raise ValueError(data['error'].get('message'))
+            
         raw_json = data['candidates'][0]['content']['parts'][0]['text']
         return json.loads(raw_json)
     except Exception as e:
@@ -91,7 +95,6 @@ def fetch_question(q_num):
             "correct": "B",
             "explanation": "Merkuriy Quyosh tizimidagi eng yaqin sayyoradir."
         }
-
 # --- Pinned Leaderboard ---
 async def get_or_create_leaderboard(bot):
     chat = await bot.get_chat(GROUP_CHAT_ID)
