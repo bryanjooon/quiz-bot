@@ -19,7 +19,7 @@ from telegram.ext import (
     ContextTypes
 )
 
-# --- Logging Configuration ---
+# --- Logging ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -32,7 +32,7 @@ GROUP_CHAT_ID = int(os.getenv("TELEGRAM_GROUP_ID"))
 PORT = int(os.environ.get("PORT", 10000))
 TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
 
-# Support single key or comma-separated multiple keys
+# Read multiple comma-separated keys
 raw_keys = os.getenv("GEMINI_API_KEYS", os.getenv("GEMINI_API_KEY", ""))
 API_KEYS = [k.strip() for k in raw_keys.split(",") if k.strip()]
 current_key_index = 0
@@ -43,9 +43,10 @@ CYRILLIC_TO_LATIN = {
     'С': 'C', 'с': 'C',
     'D': 'D', 'd': 'D', 'Д': 'D', 'д': 'D'
 }
+# Strict single-letter match: rejects "a b c d", "abcd", etc.
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
-# --- Anti-Repetition Category Matrix ---
+# Topic pools
 TOPIC_POOLS = [
     "O'zbekiston tarixi: Qadimgi Baqtriya, So'g'diyona va Kushonlar davri",
     "O'zbekiston tarixi: Somoniylar, Qoraxoniylar va Xorazmshohlar davlati",
@@ -54,31 +55,19 @@ TOPIC_POOLS = [
     "Jahon tarixi: Qadimgi Mesopotamiya, Bobil va Finikiya sivilizatsiyasi",
     "Jahon tarixi: Qadimgi Rim senati, imperatorlari va muhim janglari",
     "Jahon tarixi: O'rta asrlar Yevropasi, Salib yurishlari va feodalizm",
-    "Jahon tarixi: Birinchi va Ikkinchi jahon urushidagi kam ma'lum burilish nuqtalari",
-    "Astronomiya: Ekzosayyoralar, neytron yulduzlar va pulsar hodisalari",
-    "Astronomiya: Galaktikalar to'qnashuvi, relyikt nurlanish va qora tuynuklar",
+    "Astronomiya: Ekzosayyoralar, neytron yulduzlar va relyikt nurlanish",
     "Kosmonavtika: Mashhur kosmik zondlar (Voyager, Cassini, James Webb) missiyalari",
-    "Fizika: Nisbiylik nazariyasi, optik illyuziyalar va yorug'lik tabiati",
-    "Fizika: Termodinamika qonunlari va zamonaviy kvant kashfiyotlari",
-    "Kimyo: Davriy jadvaldagi radioaktiv elementlar va ularning ishlatilishi",
-    "Kimyo: Kundalik hayotdagi g'aroyib kimyoviy reaksiyalar va qotishmalar",
+    "Fizika: Nisbiylik nazariyasi, optik illyuziyalar va kvant kashfiyotlari",
+    "Kimyo: Davriy jadvaldagi radioaktiv elementlar va kutilmagan reaksiyalar",
     "Inson biologiyasi: Neyronlar, gormonlar, miya tuzilishi va qon aylanishi",
-    "Biologiya va Zoologiya: Dengiz tubi (Abissal) mavjudotlari va ularning moslashuvi",
-    "Biologiya va Botanika: Dunyodagi eng zaharli, kamyob va qadimgi o'simliklar",
-    "Geografiya: Dengizga chiqish yo'li yo'q davlatlar, kutilmagan eksklavlar va chegaralar",
-    "Geografiya: Dunyodagi eng xavfli vulqonlar, kanyonlar va tektonik yoriqlar",
+    "Zoologiya va Botanika: Dunyodagi eng zaharli va noyob tirik mavjudotlar",
+    "Geografiya: Dengizga chiqish yo'li yo'q davlatlar, kutilmagan eksklavlar",
     "Texnologiya: Internet protokollari, kriptografiya va kompyuter tarixi",
-    "Adabiyot: Antik davr falsafasi va Sharq mumtoz adabiyoti durdonalari",
-    "Mantiq va Deduksiya: Detektiv uslubidagi faktlar va chuqur mantiqiy masalalar"
+    "Mantiq va Deduksiya: Detektiv uslubidagi faktlar va chalkash mantiqiy masalalar"
 ]
 
-QUESTION_ANGLES = [
-    "Kutilmagan, ko'pchilik noto'g'ri taxmin qiladigan paradoksal fakt",
-    "Aniq bir kashfiyot yoki tarixiy burilish ortida turgan shaxs",
-    "Hodisaning sabab-oqibat mexanizmi",
-    "Atamaning yoki nomning kelib chiqish tarixi (etimologiyasi)",
-    "Noodatiy, kamchilik biladigan statistik yoki ilmiy qonuniyat"
-]
+# In-memory question buffer (fills in batches of 8)
+question_queue = []
 
 round_state = {
     "active": False,
@@ -90,7 +79,7 @@ round_state = {
     "attempted_users": set()
 }
 
-# --- Keep-Alive Web Server for Render ---
+# --- Keep-Alive Web Server ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -106,7 +95,7 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
     server.serve_forever()
 
-# --- API Key Management ---
+# --- API Key Rotation ---
 def get_active_gemini_url():
     global current_key_index
     if not API_KEYS:
@@ -120,7 +109,7 @@ def rotate_key():
         current_key_index = (current_key_index + 1) % len(API_KEYS)
         logger.warning(f"Rotating to next API key index: {current_key_index + 1}/{len(API_KEYS)}")
 
-# --- Persistent Data Management in Telegram ---
+# --- Telegram Storage ---
 async def get_or_create_leaderboard(bot):
     chat = await bot.get_chat(GROUP_CHAT_ID)
     pinned = chat.pinned_message
@@ -176,7 +165,7 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         if new_question_summary:
             clean_summary = new_question_summary.replace("\n", " ").strip()[:90]
             history.insert(0, clean_summary)
-            history = history[:15]  # Keep last 15 unique questions in history
+            history = history[:15]
             
         if scores_dict:
             sorted_scores = sorted(scores_dict.items(), key=lambda x: x[1], reverse=True)
@@ -206,39 +195,36 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         logger.error(f"Failed to update pin: {e}")
         return ""
 
-# --- Question Generator ---
-def fetch_question(q_num, recent_history):
-    chosen_topic = random.choice(TOPIC_POOLS)
-    chosen_angle = random.choice(QUESTION_ANGLES)
-    cache_buster = f"{int(time.time())}_{random.randint(1000, 9999)}"
-    history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "Hozircha yo'q"
+# --- Batch Question Generator (8 Questions in 1 API Call) ---
+def fetch_batch_questions(recent_history):
+    history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "Yo'q"
+    sampled_topics = random.sample(TOPIC_POOLS, 6)
 
     prompt = f"""
-    Sen Telegram viktorinasi uchun ORIGINAL va TAKRORLANMAS savol tuzuvchisan.
-    Hozirgi savol raqami: #{q_num} / 1 000 000.
-    Tasodifiy kalit: {cache_buster}.
+    Sen Telegram intellektual viktorinasi uchun 8 TA HAR XIL va UNIKAL savollar to'plamini tuzishing kerak.
     
-    MAVZU: {chosen_topic}
-    USLUB: {chosen_angle}
+    MAVZULAR: {', '.join(sampled_topics)}.
     
     QAT'IY QOIDALAR:
-    1. QUYIDAGI SO'NGGI SAVOLLARNI VA ULARNING JAVOBLARINI ASLO TAKRORLAMA:
+    1. Yaqinda berilgan savollarni takrorlama:
     {history_block}
+    2. Eng sodda, qolipli savollarni (Merkuriy, Everest, Temur qachon tug'ilgan) aslo berma.
+    3. Savollar o'rta va qiyin, faktik 100% to'g'ri bo'lsin.
+    4. Har bir savolda 4 ta variant (A, B, C, D) bo'lsin.
     
-    2. Eng sodda, maktab darsligidagi o'ta mashhur faktlarni berma (Merkuriy, Everest, Baykal, Temur qachon tug'ilgan taqiqlanadi).
-    3. Savol faktik jihatdan 100% to'g'ri, chuqur va qiziqarli bo'lsin.
-    4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
-    
-    Faqat quyidagi JSON formatida to'g'ridan-to'g'ri javob ber (hech qanday markdown kod blokisiz):
-    {{
-        "subject": "{chosen_topic.split(':')[0].strip()}",
-        "question": "Savol matni o'zbek tilida",
-        "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
-        "correct": "A",
-        "explanation": "Qisqa tushuntirish (1-2 gap)"
-    }}
+    Faqat quyidagi JSON formatida 8 ta savoldan iborat LIST qaytar:
+    [
+        {{
+            "subject": "Fan",
+            "question": "Savol matni",
+            "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
+            "correct": "A",
+            "explanation": "Qisqa tushuntirish"
+        }},
+        ...
+    ]
     """
-    
+
     attempts = len(API_KEYS) or 1
     for _ in range(attempts):
         url = get_active_gemini_url()
@@ -249,11 +235,10 @@ def fetch_question(q_num, recent_history):
                     "contents": [{"parts": [{"text": prompt}]}],
                     "generationConfig": {
                         "response_mime_type": "application/json",
-                        "temperature": 1.15,
-                        "top_p": 0.95
+                        "temperature": 1.15
                     }
                 },
-                timeout=25
+                timeout=30
             )
             data = res.json()
             if "error" in data:
@@ -266,29 +251,33 @@ def fetch_question(q_num, recent_history):
                 raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text)
                 raw_text = re.sub(r"\n?```$", "", raw_text)
                 
-            return json.loads(raw_text)
+            batch = json.loads(raw_text)
+            if isinstance(batch, list) and len(batch) > 0:
+                logger.info(f"Successfully generated batch of {len(batch)} questions!")
+                return batch
         except Exception as e:
-            logger.warning(f"Request failed: {e}")
+            logger.warning(f"Batch request failed on current key: {e}")
             rotate_key()
 
-    # Emergency fallback pool
-    emergency_pool = [
-        {
-            "subject": "Tarix",
-            "question": "Qaysi mashhur xonlik davrida 'Qo'qon adabiy muhiti' o'zining eng yuqori cho'qqisiga erishgan?",
-            "options": {"A": "Umarxon", "B": "Madalixon", "C": "Olimxon", "D": "Xudoyorxon"},
-            "correct": "A",
-            "explanation": "Amir Umarxon davrida Qo'qonda Fazliy, Nodira kabi 70 dan ortiq ijodkorlar faoliyat olib borgan."
-        },
-        {
-            "subject": "Astronomiya",
-            "question": "Quyosh tizimida o'z o'qi atrofida soat millari yo'nalishida (teskari) aylanuvchi sayyora qaysi?",
-            "options": {"A": "Venera", "B": "Neptun", "C": "Yupiter", "D": "Mars"},
-            "correct": "A",
-            "explanation": "Venera sharqdan g'arbga qarab teskari aylanadi."
-        }
-    ]
-    return random.choice(emergency_pool)
+    return []
+
+def get_next_question(recent_history):
+    global question_queue
+    if not question_queue:
+        logger.info("Question queue empty. Requesting new batch from Gemini...")
+        question_queue = fetch_batch_questions(recent_history)
+        
+    if question_queue:
+        return question_queue.pop(0)
+    
+    # Emergency fallback if all keys are unavailable
+    return {
+        "subject": "Tarix",
+        "question": "1402-yilgi Anqara jangida Amir Temur qo'shinida qaysi hayvonlardan qurol sifatida foydalanilgan?",
+        "options": {"A": "Jangovar fillar", "B": "Otliq tuyalar", "C": "Burgutlar", "D": "Qoplonlar"},
+        "correct": "A",
+        "explanation": "Amir Temur Hindiston yurishida qo'lga kiritilgan jangovar fillardan foydalangan."
+    }
 
 # --- Round Engine ---
 async def post_hourly_question(app):
@@ -297,7 +286,7 @@ async def post_hourly_question(app):
     pin = await get_or_create_leaderboard(app.bot)
     q_num, _, history = parse_pin_data(getattr(pin, "text", "") or "")
     
-    data = fetch_question(q_num, history)
+    data = get_next_question(history)
     
     round_state["active"] = True
     round_state["q_num"] = q_num
@@ -335,7 +324,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     match = ANSWER_PATTERN.match(text)
     if not match:
-        return
+        return  # Rejects "a b c d", "abcd", or conversational text
 
     user = update.message.from_user
     if user.id in round_state["attempted_users"]:
