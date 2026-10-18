@@ -70,6 +70,15 @@ TOPIC_POOLS = [
     "Adabiyot: Mumtoz adabiyot durdonalari va jahon falsafasi",
     "Mantiq va Deduksiya: Detektiv uslubidagi faktlar va chalkash mantiqiy masalalar"
 ]
+ISLAMIC_TOPIC_POOLS = [
+    "Islom dini va aqoid: Islom va iymon arkonlari, farz va vojib amallar, fiqh asoslari",
+    "Islom tarixi: Payg'ambarimiz Muhammad (s.a.v.) siyratlari — Makka va Madina davri muhim voqealari",
+    "Islom tarixi: Xulafoi Roshidin (Abu Bakr, Umar, Usmon, Ali r.a.) xalifaligi va adolat tizimi",
+    "Islom tarixi: Movarounnahr buyuk muhaddislari (Imom Buxoriy, Imom Termiziy) va fiqh olimlari (Marg'inoniy)",
+    "Islom tarixi: Islom oltin davri, Bag'doddagi 'Baytul-Hikma' akademiyasi va mutafakkirlar merosi",
+    "Islomiy obidalar va geografiya: Ka'ba, Masjidul Aqso, Masjidun Nabaviy va qadimiy islom shaharlari",
+    "Hadis ilmi va Qur'on tarixi: Mushafi Usmoniy jamlanishi va mashhur hadis to'plamlari"
+]
 
 QUESTION_ANGLES = [
     "Kutilmagan, ko'pchilik noto'g'ri taxmin qiladigan paradoksal fakt",
@@ -225,9 +234,13 @@ def get_working_groq_model():
         logger.error(f"Failed to inspect Groq model list: {e}")
     return "openai/gpt-oss-20b"
 
-# --- Question Generator ---
 def fetch_question(q_num, recent_history):
-    chosen_topic = random.choice(TOPIC_POOLS)
+    # Cadence: 1 in every 4 questions is Islamic history / religion
+    if q_num % 4 == 0:
+        chosen_topic = random.choice(ISLAMIC_TOPIC_POOLS)
+    else:
+        chosen_topic = random.choice(TOPIC_POOLS)
+
     chosen_angle = random.choice(QUESTION_ANGLES)
     cache_buster = f"{int(time.time())}_{random.randint(1000, 9999)}"
     history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "Hozircha yo'q"
@@ -245,9 +258,9 @@ def fetch_question(q_num, recent_history):
     {history_block}
     
     2. Eng sodda, qolipli maktab savollarini (Merkuriy, Everest, Temur qachon tug'ilgan, Umarxon, Brom, Simob) aslo berma!
-    3. Savol faktik jihatdan 100% to'g'ri, chuqur, o'rta yoki qiyin darajada bo'lsin.
-    4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
-    5. islom dini tarixi va islom dini haqida kopro bosin frequency har 4tada bitta
+    3. Agar mavzu Islom dini yoki tarixiga oid bo'lsa, savol faqat ishonchli (sahih) manbalar asosida, hurmat bilan va nozik ixtilofli masalalarga kirmasdan tuzilsin.
+    4. Savol faktik jihatdan 100% to'g'ri, chuqur, o'rta yoki qiyin darajada bo'lsin.
+    5. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
     
     Faqat quyidagi JSON formatida to'g'ridan-to'g'ri javob ber (hech qanday markdown kod blokisiz):
     {{
@@ -289,13 +302,12 @@ def fetch_question(q_num, recent_history):
     except Exception as e:
         logger.error(f"Groq request failed: {e}", exc_info=True)
         return {
-            "subject": "Astronomiya",
-            "question": "Oort buluti Quyosh tizimining qaysi qismida joylashgan?",
-            "options": {"A": "Eng chekka tashqi chegarasida", "B": "Mars va Yupiter oralig'ida", "C": "Quyosh toji atrofida", "D": "Yer orbitasida"},
+            "subject": "Islom tarixi",
+            "question": "Payg'ambarimiz (s.a.v.) Madinaga hijrat qilganlarida ularning tuyalari dastlab kimning hovlisiga cho'kkan?",
+            "options": {"A": "Abu Ayyub al-Ansoriy", "B": "Sa'd ibn Uboda", "C": "As'ad ibn Zurora", "D": "Usmon ibn Maz'un"},
             "correct": "A",
-            "explanation": "Oort buluti Quyosh tizimining eng chekka qismidagi gravitatsion chegarada joylashgan ulkan muzli jismlar to'plamidir."
+            "explanation": "Payg'ambarimiz (s.a.v.) Madinaga yetib kelganlarida Qasva nomli tuyalari Abu Ayyub al-Ansoriy (r.a.) uyining oldiga cho'kkan."
         }
-
 # --- Round Engine ---
 async def post_hourly_question(app):
     global round_state
