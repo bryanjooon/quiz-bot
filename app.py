@@ -11,7 +11,7 @@ import requests
 from telegram import Update
 from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 
-# --- Enable Full Logging ---
+# --- Logging ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -24,9 +24,15 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROUP_CHAT_ID = int(os.getenv("TELEGRAM_GROUP_ID"))
 PORT = int(os.environ.get("PORT", 10000))
 TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.5-flash:generateContent?key={GEMINI_API_KEY}"
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key={GEMINI_API_KEY}"
 
-ANSWER_PATTERN = re.compile(r"^\s*([A-Da-d])(\b|[.)\s]|$)")
+CYRILLIC_TO_LATIN = {
+    'А': 'A', 'а': 'A',
+    'В': 'B', 'в': 'B',
+    'С': 'C', 'с': 'C',
+    'D': 'D', 'd': 'D', 'Д': 'D', 'д': 'D'
+}
+ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])(\b|[.)\s]|$)")
 
 round_state = {
     "active": False,
@@ -37,7 +43,7 @@ round_state = {
     "attempted_users": set()
 }
 
-# --- Web Server for Keep-Alive ---
+# --- Keep-Alive Web Server ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -58,7 +64,7 @@ def fetch_question(q_num):
     prompt = f"""
     Telegram viktorinasi uchun savol tuz. Savol raqami: {q_num}/1000000.
     Fanlar: Tarix, Geografiya, Astronomiya, Fan-texnika, Biologiya, Mantiq.
-    Faqat to'g'ridan-to'g'ri JSON qaytar:
+    Faqat to'g'ridan-to'g'ri JSON formatda qaytar:
     {{
         "subject": "Fan",
         "question": "Savol matni o'zbek tilida",
@@ -73,7 +79,9 @@ def fetch_question(q_num):
             json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"response_mime_type": "application/json"}},
             timeout=10
         )
-        return json.loads(res.json()['candidates'][0]['content']['parts'][0]['text'])
+        data = res.json()
+        raw_json = data['candidates'][0]['content']['parts'][0]['text']
+        return json.loads(raw_json)
     except Exception as e:
         logger.warning(f"Gemini API fallback triggered: {e}")
         return {
@@ -84,7 +92,7 @@ def fetch_question(q_num):
             "explanation": "Merkuriy Quyosh tizimidagi eng yaqin sayyoradir."
         }
 
-# --- Pinned Leaderboard Handler ---
+# --- Pinned Leaderboard ---
 async def get_or_create_leaderboard(bot):
     chat = await bot.get_chat(GROUP_CHAT_ID)
     pinned = chat.pinned_message
@@ -170,8 +178,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = update.message.text.strip()
-    logger.info(f"Incoming group message: '{text}' from {update.message.from_user.first_name}")
-
     if not round_state["active"]:
         return
 
@@ -184,11 +190,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.message.from_user
     if user.id in round_state["attempted_users"]:
-        await update.message.reply_text(f"⚠️ {user.first_name}, siz allaqachon javob berdingiz!", quote=True)
+        await update.message.reply_text(f"⚠️ {user.first_name}, siz allaqachon javob berdingiz!")
         return
 
     round_state["attempted_users"].add(user.id)
-    choice = match.group(1).upper()
+    raw_choice = match.group(1)
+    choice = CYRILLIC_TO_LATIN.get(raw_choice, raw_choice).upper()
     logger.info(f"User {user.first_name} guessed: {choice} (Correct: {round_state['correct']})")
 
     try:
@@ -208,9 +215,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"💡 Izoh: {round_state['explanation']}\n\n"
                 f"⏳ Keyingi savol keyingi soat boshida chiqadi."
             )
-            await update.message.reply_text(reply, quote=True)
+            await update.message.reply_text(reply)
         else:
-            await update.message.reply_text(f"❌ Noto‘g‘ri, {user.first_name}! Bu soat uchun o‘yindan chiqdingiz.", quote=True)
+            await update.message.reply_text(f"❌ Noto‘g‘ri, {user.first_name}! Bu soat uchun o‘yindan chiqdingiz.")
     except Exception as e:
         logger.error(f"Error handling answer reply: {e}", exc_info=True)
 
