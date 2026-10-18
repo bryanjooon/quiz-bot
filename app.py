@@ -192,6 +192,12 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         return ""
 
 # --- Dynamic Groq Model Selector ---
+PREFERRED_MODELS = [
+    "openai/gpt-oss-20b",
+    "openai/gpt-oss-120b",
+    "qwen/qwen3.8-27b"
+]
+
 def get_working_groq_model():
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
     try:
@@ -199,18 +205,13 @@ def get_working_groq_model():
         data = res.json()
         if "data" in data:
             all_ids = [m["id"] for m in data["data"]]
-            logger.info(f"Groq models available for your key: {all_ids}")
-            # Exclude audio and moderation models
-            chat_models = [
-                m for m in all_ids 
-                if not any(x in m.lower() for x in ["whisper", "guard", "embed", "safeguard"])
-            ]
-            if chat_models:
-                logger.info(f"--> Auto-selected Groq model: {chat_models[0]}")
-                return chat_models[0]
+            # Pick the first preferred model available in your account
+            for model_id in PREFERRED_MODELS:
+                if model_id in all_ids:
+                    return model_id
     except Exception as e:
         logger.error(f"Failed to query Groq model list: {e}")
-    return "llama3-8b-8192"
+    return "openai/gpt-oss-20b"
 
 # --- Question Generator using Groq ---
 def fetch_question(q_num, recent_history):
