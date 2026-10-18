@@ -9,9 +9,9 @@ from datetime import datetime
 import pytz
 import requests
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, filters, ContextTypes
+from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
 
-# --- Enable Full Logging to see incoming messages in Render ---
+# --- Enable Full Logging ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -214,6 +214,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error handling answer reply: {e}", exc_info=True)
 
+async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != GROUP_CHAT_ID:
+        return
+    await update.message.reply_text("🧪 Test savoli ishga tushirilmoqda...")
+    await post_hourly_question(context.application)
+
 async def scheduler(app):
     while True:
         now = datetime.now(TASHKENT_TZ)
@@ -229,5 +235,8 @@ async def on_startup(app):
 if __name__ == "__main__":
     threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(on_startup).build()
+    
+    app.add_handler(CommandHandler("test", cmd_test))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    
     app.run_polling()
