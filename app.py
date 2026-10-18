@@ -42,7 +42,7 @@ CYRILLIC_TO_LATIN = {
     'D': 'D', 'd': 'D', 'Д': 'D', 'д': 'D'
 }
 
-# Strict regex: only allows a single letter like "A", "b", "C.", "D)" — rejects "a b c d"
+# Strict single-letter match: rejects "a b c d", "abcd", or random sentences
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
 TOPIC_POOLS = [
@@ -105,7 +105,19 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
     server.serve_forever()
 
-# --- Telegram Storage Helpers ---
+# --- Permission Helper ---
+async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
+    user = update.effective_user
+    if not user:
+        return False
+    try:
+        member = await context.bot.get_chat_member(GROUP_CHAT_ID, user.id)
+        return member.status in ["creator", "administrator"]
+    except Exception as e:
+        logger.error(f"Error verifying admin status: {e}")
+        return False
+
+# --- Pinned Storage Helpers ---
 async def get_or_create_leaderboard(bot):
     chat = await bot.get_chat(GROUP_CHAT_ID)
     pinned = chat.pinned_message
@@ -153,6 +165,17 @@ def parse_pin_data(pin_text):
                 
     return current_q, scores, history
 
+def format_top10_scores(scores_dict):
+    if not scores_dict:
+        return "— Hozircha ballar yo‘q —"
+    sorted_scores = sorted(scores_dict.items(), key=lambda x: x[1], reverse=True)[:10]
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for idx, (name, pts) in enumerate(sorted_scores, start=1):
+        prefix = medals[idx-1] if idx <= 3 else f"{idx}."
+        lines.append(f"{prefix} {name} — {pts} ball")
+    return "\n".join(lines)
+
 async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
     try:
         pin = await get_or_create_leaderboard(bot)
@@ -163,17 +186,7 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
             history.insert(0, clean_summary)
             history = history[:15]
             
-        if scores_dict:
-            sorted_scores = sorted(scores_dict.items(), key=lambda x: x[1], reverse=True)
-            medals = ["🥇", "🥈", "🥉"]
-            score_lines = []
-            for idx, (name, pts) in enumerate(sorted_scores, start=1):
-                prefix = medals[idx-1] if idx <= 3 else f"{idx}."
-                score_lines.append(f"{prefix} {name} — {pts} ball")
-            scores_body = "\n".join(score_lines)
-        else:
-            scores_body = "— Hozircha ballar yo‘q —"
-            
+        scores_body = format_top10_scores(scores_dict)
         history_lines = [f"• {item}" for item in history] if history else ["• Savollar tarixi boshlanmoqda..."]
         history_body = "\n".join(history_lines)
         
@@ -201,19 +214,18 @@ PREFERRED_MODELS = [
 def get_working_groq_model():
     headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
     try:
-        res = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=10)
+        res = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=8)
         data = res.json()
         if "data" in data:
             all_ids = [m["id"] for m in data["data"]]
-            # Pick the first preferred model available in your account
             for model_id in PREFERRED_MODELS:
                 if model_id in all_ids:
                     return model_id
     except Exception as e:
-        logger.error(f"Failed to query Groq model list: {e}")
+        logger.error(f"Failed to inspect Groq model list: {e}")
     return "openai/gpt-oss-20b"
 
-# --- Question Generator using Groq ---
+# --- Question Generator ---
 def fetch_question(q_num, recent_history):
     chosen_topic = random.choice(TOPIC_POOLS)
     chosen_angle = random.choice(QUESTION_ANGLES)
@@ -363,7 +375,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⚡ G‘olib: {winner_name} (+10 ball!)\n"
                 f"✅ Javob: {correct_letter}) {ans_text}\n"
                 f"💡 Izoh: {round_state['explanation']}\n\n"
-                f"📊 JORIY REYTINQ:\n"
+                f"📊 TOP-10 REYTINQ:\n"
                 f"{leaderboard_str}\n\n"
                 f"⏳ Keyingi savol keyingi soat boshida chiqadi."
             )
@@ -373,11 +385,85 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Error handling answer reply: {e}", exc_info=True)
 
+# --- Commands ---
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
     await update.message.reply_text("🧪 Test savoli ishga tushirilmoqda...")
     await post_hourly_question(context.application)
+
+async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != GROUP_CHAT_ID:
+        return
+    pin = await get_or_create_leaderboard(context.bot)
+    q_num, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
+    body = format_top10_scores(scores)
+    
+    reply = (
+        f"🏆 1 MILLION QUESTIONS · TOP-10 YETAKCHILAR\n"
+        f"Joriy savol: #{q_num:07d}\n\n"
+        f"{body}"
+    )
+    await update.message.reply_text(reply)
+
+async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global round_state
+    if update.effective_chat.id != GROUP_CHAT_ID:
+        return
+    
+    if not await is_admin(update, context):
+        await update.message.reply_text("⛔ Bu buyruq faqat guruh adminlari uchun!")
+        return
+
+    if not round_state["active"]:
+        await update.message.reply_text("ℹ️ Hozirda o'tkazib yuborish uchun faol savol yo'q.")
+        return
+
+    round_state["active"] = False
+    correct_letter = round_state["correct"]
+    ans_text = round_state["options"].get(correct_letter, "")
+    explanation = round_state["explanation"]
+    q_text = round_state["question_text"]
+    
+    pin = await get_or_create_leaderboard(context.bot)
+    q_num, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
+    
+    # Progress question number and record history without altering point totals
+    await update_pin(
+        context.bot,
+        next_q_num=q_num + 1,
+        scores_dict=scores,
+        new_question_summary=q_text
+    )
+    
+    reply = (
+        f"⏭ SAVOL O'TKAZIB YUBORILDI (Admin tomonidan)\n\n"
+        f"✅ To‘g‘ri javob: {correct_letter}) {ans_text}\n"
+        f"💡 Izoh: {explanation}\n\n"
+        f"⏳ Keyingi savol yangi soat boshida yoki /test orqali chiqadi."
+    )
+    await update.message.reply_text(reply)
+
+async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != GROUP_CHAT_ID:
+        return
+    
+    if not await is_admin(update, context):
+        await update.message.reply_text("⛔ Bu buyruq faqat guruh adminlari uchun!")
+        return
+
+    pin = await get_or_create_leaderboard(context.bot)
+    q_num, _, _ = parse_pin_data(getattr(pin, "text", "") or "")
+    
+    # Clear all player scores while keeping current round number and history intact
+    await update_pin(
+        context.bot,
+        next_q_num=q_num,
+        scores_dict={},
+        new_question_summary=None
+    )
+    
+    await update.message.reply_text("🔄 Barcha ishtirokchilarning ochkolari (ballari) muvaffaqiyatli nollashtirildi!")
 
 async def scheduler(app):
     while True:
@@ -396,6 +482,9 @@ if __name__ == "__main__":
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(on_startup).build()
     
     app.add_handler(CommandHandler("test", cmd_test))
+    app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
+    app.add_handler(CommandHandler("skip", cmd_skip))
+    app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
     app.run_polling()
