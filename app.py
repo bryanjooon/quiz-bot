@@ -389,6 +389,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
+        
+    # Restrict to Admins only
+    if not await is_admin(update, context):
+        await update.message.reply_text("⛔ Bu buyruq faqat guruh adminlari uchun!")
+        return
+        
     await update.message.reply_text("🧪 Test savoli ishga tushirilmoqda...")
     await post_hourly_question(context.application)
 
