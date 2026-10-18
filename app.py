@@ -191,6 +191,27 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         logger.error(f"Failed to update pin: {e}")
         return ""
 
+# --- Dynamic Groq Model Selector ---
+def get_working_groq_model():
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+    try:
+        res = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=10)
+        data = res.json()
+        if "data" in data:
+            all_ids = [m["id"] for m in data["data"]]
+            logger.info(f"Groq models available for your key: {all_ids}")
+            # Exclude audio and moderation models
+            chat_models = [
+                m for m in all_ids 
+                if not any(x in m.lower() for x in ["whisper", "guard", "embed", "safeguard"])
+            ]
+            if chat_models:
+                logger.info(f"--> Auto-selected Groq model: {chat_models[0]}")
+                return chat_models[0]
+    except Exception as e:
+        logger.error(f"Failed to query Groq model list: {e}")
+    return "llama3-8b-8192"
+
 # --- Question Generator using Groq ---
 def fetch_question(q_num, recent_history):
     chosen_topic = random.choice(TOPIC_POOLS)
@@ -210,7 +231,7 @@ def fetch_question(q_num, recent_history):
     1. QUYIDAGI SO'NGGI SAVOLLARNI VA ULARNING JAVOBLARINI ASLO TAKRORLAMA:
     {history_block}
     
-    2. Eng sodda, qolipli maktab savollarini (Merkuriy, Everest, Temur qachon tug'ilgan, Brom, Simob) aslo berma!
+    2. Eng sodda, qolipli maktab savollarini (Merkuriy, Everest, Temur qachon tug'ilgan, Umarxon, Brom, Simob) aslo berma!
     3. Savol faktik jihatdan 100% to'g'ri, chuqur, o'rta yoki qiyin darajada bo'lsin.
     4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
     
@@ -224,13 +245,14 @@ def fetch_question(q_num, recent_history):
     }}
     """
     
+    selected_model = get_working_groq_model()
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
     
     payload = {
-        "model": "llama-3.1-8b-instant",
+        "model": selected_model,
         "messages": [
             {"role": "system", "content": "Faqat to'g'ridan-to'g'ri yaroqli JSON qaytar."},
             {"role": "user", "content": prompt}
@@ -253,11 +275,11 @@ def fetch_question(q_num, recent_history):
     except Exception as e:
         logger.error(f"Groq request failed: {e}", exc_info=True)
         return {
-            "subject": "Tarix",
-            "question": "Qaysi xonlik davrida 'Qo'qon adabiy muhiti' o'zining eng yuqori cho'qqisiga erishgan?",
-            "options": {"A": "Umarxon", "B": "Madalixon", "C": "Olimxon", "D": "Xudoyorxon"},
+            "subject": "Astronomiya",
+            "question": "Oort buluti Quyosh tizimining qaysi qismida joylashgan?",
+            "options": {"A": "Eng chekka tashqi chegarasida", "B": "Mars va Yupiter oralig'ida", "C": "Quyosh toji atrofida", "D": "Yer orbitasida"},
             "correct": "A",
-            "explanation": "Amir Umarxon davrida Qo'qonda Fazliy, Nodira kabi 70 dan ortiq ijodkorlar faoliyat olib borgan."
+            "explanation": "Oort buluti Quyosh tizimining eng chekka qismidagi gravitatsion chegarada joylashgan ulkan muzli jismlar to'plamidir."
         }
 
 # --- Round Engine ---
