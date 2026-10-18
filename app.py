@@ -11,22 +11,31 @@ from datetime import datetime
 import pytz
 import requests
 from telegram import Update
-from telegram.ext import ApplicationBuilder, MessageHandler, CommandHandler, filters, ContextTypes
+from telegram.ext import (
+    ApplicationBuilder,
+    MessageHandler,
+    CommandHandler,
+    filters,
+    ContextTypes
+)
 
-# --- Logging ---
+# --- Logging Configuration ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
 )
 logger = logging.getLogger(__name__)
 
-# --- Configuration ---
+# --- Environment Configuration ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROUP_CHAT_ID = int(os.getenv("TELEGRAM_GROUP_ID"))
 PORT = int(os.environ.get("PORT", 10000))
 TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={GEMINI_API_KEY}"
+
+# Support single key or comma-separated multiple keys
+raw_keys = os.getenv("GEMINI_API_KEYS", os.getenv("GEMINI_API_KEY", ""))
+API_KEYS = [k.strip() for k in raw_keys.split(",") if k.strip()]
+current_key_index = 0
 
 CYRILLIC_TO_LATIN = {
     'А': 'A', 'а': 'A',
@@ -36,9 +45,9 @@ CYRILLIC_TO_LATIN = {
 }
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])(\b|[.)\s]|$)")
 
-# Deep pools of specialized topics
+# --- Anti-Repetition Category Matrix ---
 TOPIC_POOLS = [
-    "O'zbekiston tarixi: Qadimgi Baqtriya, So'g'diyona va Kushon imperiyasi",
+    "O'zbekiston tarixi: Qadimgi Baqtriya, So'g'diyona va Kushonlar davri",
     "O'zbekiston tarixi: Somoniylar, Qoraxoniylar va Xorazmshohlar davlati",
     "O'zbekiston tarixi: Amir Temur harbiy yurishlari va diplomatik aloqalari",
     "O'zbekiston tarixi: Turkiston jadidchilik harakati va 20-asr fojialari",
@@ -48,7 +57,7 @@ TOPIC_POOLS = [
     "Jahon tarixi: Birinchi va Ikkinchi jahon urushidagi kam ma'lum burilish nuqtalari",
     "Astronomiya: Ekzosayyoralar, neytron yulduzlar va pulsar hodisalari",
     "Astronomiya: Galaktikalar to'qnashuvi, relyikt nurlanish va qora tuynuklar",
-    "Kosmonavtika: Mashhur kosmik zondlar (Voyager, Cassini, New Horizons) missiyalari",
+    "Kosmonavtika: Mashhur kosmik zondlar (Voyager, Cassini, James Webb) missiyalari",
     "Fizika: Nisbiylik nazariyasi, optik illyuziyalar va yorug'lik tabiati",
     "Fizika: Termodinamika qonunlari va zamonaviy kvant kashfiyotlari",
     "Kimyo: Davriy jadvaldagi radioaktiv elementlar va ularning ishlatilishi",
@@ -57,10 +66,10 @@ TOPIC_POOLS = [
     "Biologiya va Zoologiya: Dengiz tubi (Abissal) mavjudotlari va ularning moslashuvi",
     "Biologiya va Botanika: Dunyodagi eng zaharli, kamyob va qadimgi o'simliklar",
     "Geografiya: Dengizga chiqish yo'li yo'q davlatlar, kutilmagan eksklavlar va chegaralar",
-    "Geografiya: Dunyodagi eng xavfli vulqonlar, chuqur botqoqliklar va tektonik yoriqlar",
-    "Texnologiya va Kiberxavfsizlik: Internet protokollari, kriptografiya va kompyuter tarixi",
-    "Adabiyot va Falsafa: Antik davr faylasuflari (Suqrot, Aflotun) va Sharq donishmandlari",
-    "Mantiq va Deduksiya: Detektiv uslubidagi faktlar va chalkash mantiqiy masalalar"
+    "Geografiya: Dunyodagi eng xavfli vulqonlar, kanyonlar va tektonik yoriqlar",
+    "Texnologiya: Internet protokollari, kriptografiya va kompyuter tarixi",
+    "Adabiyot: Antik davr falsafasi va Sharq mumtoz adabiyoti durdonalari",
+    "Mantiq va Deduksiya: Detektiv uslubidagi faktlar va chuqur mantiqiy masalalar"
 ]
 
 QUESTION_ANGLES = [
@@ -77,10 +86,11 @@ round_state = {
     "correct": None,
     "options": {},
     "explanation": "",
+    "question_text": "",
     "attempted_users": set()
 }
 
-# --- Keep-Alive Web Server ---
+# --- Keep-Alive Web Server for Render ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -90,14 +100,27 @@ class HealthHandler(BaseHTTPRequestHandler):
         
     def do_HEAD(self):
         self.send_response(200)
-        self.send_header("Content-type", "text/plain")
         self.end_headers()
 
 def run_web_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
     server.serve_forever()
 
-# --- Pinned Message Parsing (Scores + Question History) ---
+# --- API Key Management ---
+def get_active_gemini_url():
+    global current_key_index
+    if not API_KEYS:
+        return ""
+    key = API_KEYS[current_key_index % len(API_KEYS)]
+    return f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={key}"
+
+def rotate_key():
+    global current_key_index
+    if len(API_KEYS) > 1:
+        current_key_index = (current_key_index + 1) % len(API_KEYS)
+        logger.warning(f"Rotating to next API key index: {current_key_index + 1}/{len(API_KEYS)}")
+
+# --- Persistent Data Management in Telegram ---
 async def get_or_create_leaderboard(bot):
     chat = await bot.get_chat(GROUP_CHAT_ID)
     pinned = chat.pinned_message
@@ -118,18 +141,17 @@ async def get_or_create_leaderboard(bot):
     try:
         await bot.pin_chat_message(GROUP_CHAT_ID, msg.message_id)
     except Exception as e:
-        logger.error(f"Could not pin leaderboard: {e}")
+        logger.error(f"Could not pin message: {e}")
     return msg
 
 def parse_pin_data(pin_text):
-    """Extracts scores, current question count, and recent questions history."""
     q_match = re.search(r"Joriy savol: #(\d+)", pin_text)
     current_q = int(q_match.group(1)) if q_match else 1
     
     scores = {}
     history = []
-    
     is_history_section = False
+    
     for line in pin_text.split("\n"):
         line = line.strip()
         if "So‘nggi savollar tarixi:" in line:
@@ -141,7 +163,7 @@ def parse_pin_data(pin_text):
             if m:
                 scores[m.group(1)] = int(m.group(2))
         else:
-            if line.startswith("•") and not "boshlanmoqda" in line:
+            if line.startswith("•") and "boshlanmoqda" not in line:
                 history.append(line.replace("•", "").strip())
                 
     return current_q, scores, history
@@ -154,9 +176,8 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         if new_question_summary:
             clean_summary = new_question_summary.replace("\n", " ").strip()[:90]
             history.insert(0, clean_summary)
-            history = history[:15]  # Keep last 15 questions in memory
+            history = history[:15]  # Keep last 15 unique questions in history
             
-        # Format scores
         if scores_dict:
             sorted_scores = sorted(scores_dict.items(), key=lambda x: x[1], reverse=True)
             medals = ["🥇", "🥈", "🥉"]
@@ -168,7 +189,6 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         else:
             scores_body = "— Hozircha ballar yo‘q —"
             
-        # Format history
         history_lines = [f"• {item}" for item in history] if history else ["• Savollar tarixi boshlanmoqda..."]
         history_body = "\n".join(history_lines)
         
@@ -186,11 +206,11 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         logger.error(f"Failed to update pin: {e}")
         return ""
 
+# --- Question Generator ---
 def fetch_question(q_num, recent_history):
     chosen_topic = random.choice(TOPIC_POOLS)
     chosen_angle = random.choice(QUESTION_ANGLES)
     cache_buster = f"{int(time.time())}_{random.randint(1000, 9999)}"
-    
     history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "Hozircha yo'q"
 
     prompt = f"""
@@ -202,14 +222,14 @@ def fetch_question(q_num, recent_history):
     USLUB: {chosen_angle}
     
     QAT'IY QOIDALAR:
-    1. QUYIDAGI YAQUNDA BERILGAN SAVOLLARNI VA ULARNING MAVZUSINI TAKRORLAMA:
+    1. QUYIDAGI SO'NGGI SAVOLLARNI VA ULARNING JAVOBLARINI ASLO TAKRORLAMA:
     {history_block}
     
-    2. Eng sodda, qolipli savollarni aslo berma (Merkuriy, Everest, Baykal, Temur qachon tug'ilgan kabilar taqiqlanadi).
-    3. Savol aqlli, qiziqarli, o'rta yoki qiyin darajada bo'lsin.
+    2. Eng sodda, maktab darsligidagi o'ta mashhur faktlarni berma (Merkuriy, Everest, Baykal, Temur qachon tug'ilgan taqiqlanadi).
+    3. Savol faktik jihatdan 100% to'g'ri, chuqur va qiziqarli bo'lsin.
     4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
     
-    Faqat quyidagi JSON formatida to'g'ridan-to'g'ri javob ber:
+    Faqat quyidagi JSON formatida to'g'ridan-to'g'ri javob ber (hech qanday markdown kod blokisiz):
     {{
         "subject": "{chosen_topic.split(':')[0].strip()}",
         "question": "Savol matni o'zbek tilida",
@@ -219,67 +239,63 @@ def fetch_question(q_num, recent_history):
     }}
     """
     
-    try:
-        res = requests.post(
-            GEMINI_URL,
-            json={
-                "contents": [{"parts": [{"text": prompt}]}],
-                "generationConfig": {
-                    "response_mime_type": "application/json",
-                    "temperature": 1.15,
-                    "top_p": 0.95
-                }
-            },
-            timeout=30  # Expanded from 12s to prevent premature timeouts
-        )
-        data = res.json()
-        if "error" in data:
-            logger.error(f"Google API Error: {data['error'].get('message')}")
-            raise ValueError(data['error'].get('message'))
-            
-        raw_text = data['candidates'][0]['content']['parts'][0]['text'].strip()
-        
-        # Clean any accidental markdown wrap
-        if raw_text.startswith("```"):
-            raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text)
-            raw_text = re.sub(r"\n?```$", "", raw_text)
-            
-        return json.loads(raw_text)
-        
-    except Exception as e:
-        logger.error(f"Gemini API request failed completely: {e}", exc_info=True)
-        
-        # Multi-question emergency pool so it never repeats the same fallback
-        emergency_pool = [
-            {
-                "subject": "Tarix",
-                "question": "Qaysi mashhur xonlik davrida 'Qo'qon adabiy muhiti' o'zining eng yuqori cho'qqisiga erishgan?",
-                "options": {"A": "Umarxon", "B": "Madalixon", "C": "Olimxon", "D": "Xudoyorxon"},
-                "correct": "A",
-                "explanation": "Amir Umarxon (taxallusi Amiriy) davrida Qo'qonda Fazliy, Nodira kabi 70 dan ortiq shoirlar ijod qilgan."
-            },
-            {
-                "subject": "Astronomiya",
-                "question": "Quyosh tizimida o'z o'qi atrofida soat millari yo'nalishida (teskari) aylanuvchi sayyora qaysi?",
-                "options": {"A": "Venera", "B": "Neptun", "C": "Yupiter", "D": "Mars"},
-                "correct": "A",
-                "explanation": "Venera boshqa barcha sayyoralardan farqli ravishda sharqdan g'arbga qarab teskari aylanadi."
-            },
-            {
-                "subject": "Fizika",
-                "question": "Absolyut nol harorat Selsiy shkalasi bo'yicha necha darajaga teng?",
-                "options": {"A": "-273.15°C", "B": "-100°C", "C": "-300°C", "D": "-212°C"},
-                "correct": "A",
-                "explanation": "0 Kelvin absolyut nol hisoblanadi va u -273.15°C ga to'g'ri keladi."
-            }
-        ]
-        return random.choice(emergency_pool)
+    attempts = len(API_KEYS) or 1
+    for _ in range(attempts):
+        url = get_active_gemini_url()
+        try:
+            res = requests.post(
+                url,
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "response_mime_type": "application/json",
+                        "temperature": 1.15,
+                        "top_p": 0.95
+                    }
+                },
+                timeout=25
+            )
+            data = res.json()
+            if "error" in data:
+                logger.error(f"Gemini API Error: {data['error'].get('message')}")
+                rotate_key()
+                continue
+                
+            raw_text = data['candidates'][0]['content']['parts'][0]['text'].strip()
+            if raw_text.startswith("```"):
+                raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text)
+                raw_text = re.sub(r"\n?```$", "", raw_text)
+                
+            return json.loads(raw_text)
+        except Exception as e:
+            logger.warning(f"Request failed: {e}")
+            rotate_key()
+
+    # Emergency fallback pool
+    emergency_pool = [
+        {
+            "subject": "Tarix",
+            "question": "Qaysi mashhur xonlik davrida 'Qo'qon adabiy muhiti' o'zining eng yuqori cho'qqisiga erishgan?",
+            "options": {"A": "Umarxon", "B": "Madalixon", "C": "Olimxon", "D": "Xudoyorxon"},
+            "correct": "A",
+            "explanation": "Amir Umarxon davrida Qo'qonda Fazliy, Nodira kabi 70 dan ortiq ijodkorlar faoliyat olib borgan."
+        },
+        {
+            "subject": "Astronomiya",
+            "question": "Quyosh tizimida o'z o'qi atrofida soat millari yo'nalishida (teskari) aylanuvchi sayyora qaysi?",
+            "options": {"A": "Venera", "B": "Neptun", "C": "Yupiter", "D": "Mars"},
+            "correct": "A",
+            "explanation": "Venera sharqdan g'arbga qarab teskari aylanadi."
+        }
+    ]
+    return random.choice(emergency_pool)
+
 # --- Round Engine ---
 async def post_hourly_question(app):
     global round_state
     
     pin = await get_or_create_leaderboard(app.bot)
-    q_num, scores, history = parse_pin_data(getattr(pin, "text", "") or "")
+    q_num, _, history = parse_pin_data(getattr(pin, "text", "") or "")
     
     data = fetch_question(q_num, history)
     
@@ -335,12 +351,10 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             round_state["active"] = False
             winner_name = user.first_name or "O‘yinchi"
             
-            # Read current pin data, calculate next question number & new score
             pin = await get_or_create_leaderboard(context.bot)
             q_num, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
             scores[winner_name] = scores.get(winner_name, 0) + 10
             
-            # Save question into the persistent history inside the pinned message
             leaderboard_str = await update_pin(
                 context.bot,
                 next_q_num=q_num + 1,
@@ -376,7 +390,7 @@ async def scheduler(app):
     while True:
         now = datetime.now(TASHKENT_TZ)
         seconds_to_wait = (60 - now.minute - 1) * 60 + (60 - now.second)
-        logger.info(f"Next question in {seconds_to_wait}s.")
+        logger.info(f"Next hourly question in {seconds_to_wait}s.")
         await asyncio.sleep(seconds_to_wait)
         await post_hourly_question(app)
         await asyncio.sleep(5)
