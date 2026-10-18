@@ -343,10 +343,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user = update.message.from_user
+    
+    # 1. If user already attempted, silently delete their spam message and ignore
     if user.id in round_state["attempted_users"]:
-        await update.message.reply_text(f"⚠️ {user.first_name}, siz bu savolga javob berib bo‘ldingiz!")
+        try:
+            await update.message.delete()
+        except Exception as e:
+            logger.warning(f"Could not delete repeat attempt: {e}")
         return
 
+    # Mark user as having played this round
     round_state["attempted_users"].add(user.id)
     raw_choice = match.group(1)
     choice = CYRILLIC_TO_LATIN.get(raw_choice, raw_choice).upper()
@@ -381,7 +387,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await update.message.reply_text(reply)
         else:
-            await update.message.reply_text(f"❌ Noto‘g‘ri, {user.first_name}! Bu soat uchun o‘yindan chiqdingiz.")
+            # 2. If their first attempt is WRONG, silently delete it to prevent chat clutter
+            try:
+                await update.message.delete()
+            except Exception as e:
+                logger.warning(f"Could not delete wrong attempt: {e}")
+                
     except Exception as e:
         logger.error(f"Error handling answer reply: {e}", exc_info=True)
 
