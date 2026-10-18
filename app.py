@@ -42,7 +42,7 @@ round_state = {
     "attempted_users": set()
 }
 
-ACTIVE_MODEL = "gemini-2.0-flash"
+ACTIVE_MODEL = "gemini-3.8-flash"
 
 # --- Web Server for Keep-Alive ---
 class HealthHandler(BaseHTTPRequestHandler):
@@ -109,7 +109,7 @@ def fetch_question(q_num):
         "explanation": "Qisqa tushuntirish"
     }}
     """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/{ACTIVE_MODEL}:generateContent?key={GEMINI_API_KEY}"
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={GEMINI_API_KEY}"
     try:
         res = requests.post(
             url,
