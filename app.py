@@ -1,6 +1,8 @@
 import os
 import re
 import json
+import time
+import random
 import asyncio
 import logging
 import threading
@@ -24,6 +26,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROUP_CHAT_ID = int(os.getenv("TELEGRAM_GROUP_ID"))
 PORT = int(os.environ.get("PORT", 10000))
 TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
+GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={GEMINI_API_KEY}"
 
 CYRILLIC_TO_LATIN = {
     'А': 'A', 'а': 'A',
@@ -32,6 +35,28 @@ CYRILLIC_TO_LATIN = {
     'D': 'D', 'd': 'D', 'Д': 'D', 'д': 'D'
 }
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])(\b|[.)\s]|$)")
+
+# --- Deep Subcategories to Prevent Repetition ---
+TOPIC_POOLS = [
+    "O'zbekiston tarixi (Amir Temur, Boburiylar, Xorazmshohlar davri)",
+    "O'zbekiston tarixi (Jadidchilik, 20-asr fojialari, mustaqillik yillari)",
+    "Jahon tarixi (Qadimgi Misr, Qadimgi Yunoniston, Rim imperiyasi)",
+    "Jahon tarixi (O'rta asrlar, Buyuk geografik kashfiyotlar, Renessans)",
+    "Astronomiya (Quyosh tizimi, ekzosayyoralar, qora tuynuklar)",
+    "Kosmonavtika (Mashhur fazogirlar, Apollo va Mars missiyalari)",
+    "Kimyo (Elementlar davriy jadvali, nodir metallar, nometallar)",
+    "Fizika (Kvant mexanikasi, nisbiylik nazariyasi, kashfiyotchilar)",
+    "Biologiya (Inson anatomiyasi, genlar, miya va yurak faoliyati)",
+    "Zoologiya (Nodir va xavfli hayvonlar, qiziqarli biologik faktlar)",
+    "Geografiya (Dunyo poytaxtlari, dengizlar, bo'g'ozlar, vulqonlar)",
+    "Axborot texnologiyalari (Kompyuter tarixi, dasturlash asoslari, AI)",
+    "O'zbek adabiyoti (Alisher Navoiy, Abdulla Qodiriy, Cho'lpon asarlari)",
+    "Jahon adabiyoti (Klassik romanlar, Nobel mukofoti sohiblari)",
+    "Mantiq va Deduksiya (Chalg'ituvchi va chuqur fikrlashni talab qiluvchi savollar)"
+]
+
+# Track asked questions in memory during uptime
+seen_questions = set()
 
 round_state = {
     "active": False,
@@ -42,9 +67,7 @@ round_state = {
     "attempted_users": set()
 }
 
-ACTIVE_MODEL = "gemini-3.8-flash"
-
-# --- Web Server for Keep-Alive ---
+# --- Keep-Alive Web Server ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -54,86 +77,90 @@ class HealthHandler(BaseHTTPRequestHandler):
         
     def do_HEAD(self):
         self.send_response(200)
+        self.send_header("Content-type", "text/plain")
         self.end_headers()
 
 def run_web_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
     server.serve_forever()
 
-# --- Auto-Detect Valid Google Model ---
-def detect_gemini_model():
-    global ACTIVE_MODEL
-    try:
-        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
-        res = requests.get(url, timeout=10)
-        data = res.json()
-        if "models" in data:
-            available = []
-            for m in data["models"]:
-                if "generateContent" in m.get("supportedGenerationMethods", []):
-                    clean_name = m["name"].replace("models/", "")
-                    available.append(clean_name)
-            
-            logger.info(f"Available models for this API key: {available}")
-            
-            # Prefer flash models
-            for model_name in available:
-                if "flash" in model_name:
-                    ACTIVE_MODEL = model_name
-                    logger.info(f"--> Selected Gemini Model: {ACTIVE_MODEL}")
-                    return
-            
-            if available:
-                ACTIVE_MODEL = available[0]
-                logger.info(f"--> Selected Gemini Model: {ACTIVE_MODEL}")
-                return
-        else:
-            logger.error(f"Could not fetch models list: {data}")
-    except Exception as e:
-        logger.error(f"Auto-detect model failed: {e}")
-
-# --- Question Generator ---
+# --- Question Generator with Anti-Repetition ---
 def fetch_question(q_num):
-    prompt = f"""
-    Sen Telegram intellektual viktorinasi uchun savol tuzuvchisan.
-    Hozirgi savol raqami: {q_num} / 1000000.
-    Har xil qiziqarli fan tanla: O'zbekiston tarixi, Jahon tarixi, Geografiya, Astronomiya, Fan-texnika, Biologiya, Kimyo, Mantiq.
-    Qiyinlik: aralash (oson, o'rta, qiyin).
+    global seen_questions
     
-    Faqat quyidagi JSON formatida to'g'ridan-to'g'ri javob qaytar (markdown code blocksiz):
-    {{
-        "subject": "Fan nomi",
-        "question": "Savol matni o'zbek tilida",
-        "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
-        "correct": "A",
-        "explanation": "Qisqa tushuntirish"
-    }}
-    """
-    url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={GEMINI_API_KEY}"
-    try:
-        res = requests.post(
-            url,
-            json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"response_mime_type": "application/json"}},
-            timeout=10
-        )
-        data = res.json()
-        if "error" in data:
-            logger.error(f"Google API Error: {data['error'].get('message')}")
-            raise ValueError(data['error'].get('message'))
+    # Try up to 3 times to get a completely unique question
+    for attempt in range(3):
+        chosen_topic = random.choice(TOPIC_POOLS)
+        cache_buster = f"{int(time.time())}_{random.randint(1000, 9999)}"
+        
+        prompt = f"""
+        Sen Telegram intellektual viktorinasi uchun maxsus savol tuzuvchisan.
+        Savol raqami: #{q_num} / 1 000 000.
+        Mavzu: {chosen_topic}.
+        Unikal kalit: {cache_buster}.
+        
+        QOIDALAR:
+        1. Savol o'ta original va faktik jihatdan 100% aniq bo'lsin.
+        2. Eng keng tarqalgan, ibtidoiy savollarni (masalan: "Eng katta okean qaysi?" yoki "Quyoshga eng yaqin sayyora") BERMA.
+        3. Qiyinlik: o'rta yoki qiyin, do'stlar o'rtasida qizg'in bahs uyg'otadigan savol bo'lsin.
+        
+        Quyidagi JSON formatida to'g'ridan-to'g'ri qaytar (hech qanday markdown blokisiz):
+        {{
+            "subject": "{chosen_topic.split('(')[0].strip()}",
+            "question": "Savol matni o'zbek tilida",
+            "options": {{"A": "Variant 1", "B": "Variant 2", "C": "Variant 3", "D": "Variant 4"}},
+            "correct": "A",
+            "explanation": "Qisqa va aniq ilmiy/tarixiy tushuntirish (1-2 gap)"
+        }}
+        """
+        try:
+            res = requests.post(
+                GEMINI_URL,
+                json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"response_mime_type": "application/json"}},
+                timeout=12
+            )
+            data = res.json()
+            if "error" in data:
+                logger.error(f"Google API Error: {data['error'].get('message')}")
+                raise ValueError(data['error'].get('message'))
+                
+            raw_json = data['candidates'][0]['content']['parts'][0]['text']
+            parsed = json.loads(raw_json)
             
-        raw_json = data['candidates'][0]['content']['parts'][0]['text']
-        return json.loads(raw_json)
-    except Exception as e:
-        logger.warning(f"Gemini API fallback triggered: {e}")
-        return {
-            "subject": "Astronomiya",
-            "question": "Quyoshga eng yaqin sayyora qaysi?",
-            "options": {"A": "Venera", "B": "Merkuriy", "C": "Mars", "D": "Yer"},
-            "correct": "B",
-            "explanation": "Merkuriy Quyosh tizimidagi eng yaqin sayyoradir."
-        }
+            q_text = parsed.get("question", "").strip()
+            # Check if this question was already used recently
+            if q_text not in seen_questions:
+                seen_questions.add(q_text)
+                if len(seen_questions) > 500:
+                    seen_questions.pop()
+                return parsed
+            else:
+                logger.info(f"Duplicate detected: '{q_text}', regenerating...")
+        except Exception as e:
+            logger.warning(f"Gemini API attempt {attempt+1} failed: {e}")
+            time.sleep(1)
 
-# --- Pinned Leaderboard Handler ---
+    # Secondary fallback only if Google is completely unreachable
+    return {
+        "subject": "Tarix",
+        "question": "Sohibqiron Amir Temurning suyukli rafiqasi Saroymulkxonim (Bibixonim) kimning qizi bo'lgan?",
+        "options": {"A": "Qozonxon", "B": "Kebekxon", "C": "Chig'atoyxon", "D": "To'xtamishxon"},
+        "correct": "A",
+        "explanation": "Saroymulkxonim Chig'atoy ulusi xoni Qozonxonning qizi bo'lgan."
+    }
+
+# --- Pinned Leaderboard & Formatting Helpers ---
+def format_leaderboard_text(scores_dict):
+    if not scores_dict:
+        return "— Hozircha ballar yo‘q —"
+    sorted_scores = sorted(scores_dict.items(), key=lambda x: x[1], reverse=True)
+    medals = ["🥇", "🥈", "🥉"]
+    lines = []
+    for idx, (name, pts) in enumerate(sorted_scores, start=1):
+        prefix = medals[idx-1] if idx <= 3 else f"{idx}."
+        lines.append(f"{prefix} {name} — {pts} ball")
+    return "\n".join(lines)
+
 async def get_or_create_leaderboard(bot):
     chat = await bot.get_chat(GROUP_CHAT_ID)
     pinned = chat.pinned_message
@@ -164,13 +191,16 @@ async def update_score_in_pin(bot, winner_name, points=10):
         
         scores = {}
         for line in text.split("\n"):
-            m = re.match(r"^• (.+?): (\d+) ball", line.strip())
+            m = re.match(r"^[🥇🥈🥉\d.]+\s*(.+?)\s*—\s*(\d+)\s*ball", line.strip())
             if m:
                 scores[m.group(1)] = int(m.group(2))
+            else:
+                m_old = re.match(r"^• (.+?): (\d+) ball", line.strip())
+                if m_old:
+                    scores[m_old.group(1)] = int(m_old.group(2))
                 
         scores[winner_name] = scores.get(winner_name, 0) + points
-        sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
-        body = "\n".join([f"• {name}: {pts} ball" for name, pts in sorted_scores])
+        body = format_leaderboard_text(scores)
         
         new_text = (
             f"🏆 1 MILLION QUESTIONS · YETAKCHILAR JADVALI\n"
@@ -178,8 +208,10 @@ async def update_score_in_pin(bot, winner_name, points=10):
             f"{body}"
         )
         await bot.edit_message_text(chat_id=GROUP_CHAT_ID, message_id=pin.message_id, text=new_text)
+        return body
     except Exception as e:
         logger.error(f"Failed to update pinned message: {e}")
+        return ""
 
 # --- Round Engine ---
 async def post_hourly_question(app):
@@ -210,7 +242,7 @@ async def post_hourly_question(app):
         f"⚡ To‘g‘ri variant harfini yozing (A, B, C yoki D)! Bir kishiga 1 ta urinish."
     )
     await app.bot.send_message(GROUP_CHAT_ID, msg_text)
-    logger.info(f"Question #{q_num} posted. Correct answer is {round_state['correct']}")
+    logger.info(f"Question #{q_num} posted. Correct answer: {round_state['correct']}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global round_state
@@ -231,7 +263,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.message.from_user
     if user.id in round_state["attempted_users"]:
-        await update.message.reply_text(f"⚠️ {user.first_name}, siz allaqachon javob berdingiz!")
+        await update.message.reply_text(f"⚠️ {user.first_name}, siz bu savolga javob berib bo‘ldingiz!")
         return
 
     round_state["attempted_users"].add(user.id)
@@ -244,7 +276,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             round_state["active"] = False
             winner_name = user.first_name or "O‘yinchi"
             
-            await update_score_in_pin(context.bot, winner_name, points=10)
+            # Update pin and return the live updated standings table
+            leaderboard_str = await update_score_in_pin(context.bot, winner_name, points=10)
             
             correct_letter = round_state["correct"]
             ans_text = round_state["options"].get(correct_letter, "")
@@ -254,6 +287,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⚡ G‘olib: {winner_name} (+10 ball!)\n"
                 f"✅ Javob: {correct_letter}) {ans_text}\n"
                 f"💡 Izoh: {round_state['explanation']}\n\n"
+                f"📊 JORIY REYTINQ:\n"
+                f"{leaderboard_str}\n\n"
                 f"⏳ Keyingi savol keyingi soat boshida chiqadi."
             )
             await update.message.reply_text(reply)
@@ -278,8 +313,6 @@ async def scheduler(app):
         await asyncio.sleep(5)
 
 async def on_startup(app):
-    # Detect supported models before launching scheduler
-    detect_gemini_model()
     asyncio.create_task(scheduler(app))
 
 if __name__ == "__main__":
