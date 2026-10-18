@@ -28,14 +28,12 @@ logger = logging.getLogger(__name__)
 
 # --- Environment Configuration ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROUP_CHAT_ID = int(os.getenv("TELEGRAM_GROUP_ID"))
 PORT = int(os.environ.get("PORT", 10000))
 TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
 
-# Read multiple comma-separated keys
-raw_keys = os.getenv("GEMINI_API_KEYS", os.getenv("GEMINI_API_KEY", ""))
-API_KEYS = [k.strip() for k in raw_keys.split(",") if k.strip()]
-current_key_index = 0
+GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
 
 CYRILLIC_TO_LATIN = {
     'А': 'A', 'а': 'A',
@@ -43,31 +41,42 @@ CYRILLIC_TO_LATIN = {
     'С': 'C', 'с': 'C',
     'D': 'D', 'd': 'D', 'Д': 'D', 'д': 'D'
 }
-# Strict single-letter match: rejects "a b c d", "abcd", etc.
+# Strict regex: Matches only single letter choice; rejects "a b c d" or conversational sentences
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
-# Topic pools
 TOPIC_POOLS = [
     "O'zbekiston tarixi: Qadimgi Baqtriya, So'g'diyona va Kushonlar davri",
     "O'zbekiston tarixi: Somoniylar, Qoraxoniylar va Xorazmshohlar davlati",
     "O'zbekiston tarixi: Amir Temur harbiy yurishlari va diplomatik aloqalari",
     "O'zbekiston tarixi: Turkiston jadidchilik harakati va 20-asr fojialari",
     "Jahon tarixi: Qadimgi Mesopotamiya, Bobil va Finikiya sivilizatsiyasi",
-    "Jahon tarixi: Qadimgi Rim senati, imperatorlari va muhim janglari",
+    "Jahon tarixi: Qadimgi Rim senati, imperatorlari va mashhur janglari",
     "Jahon tarixi: O'rta asrlar Yevropasi, Salib yurishlari va feodalizm",
-    "Astronomiya: Ekzosayyoralar, neytron yulduzlar va relyikt nurlanish",
+    "Jahon tarixi: Birinchi va Ikkinchi jahon urushidagi kam ma'lum burilish nuqtalari",
+    "Astronomiya: Ekzosayyoralar, neytron yulduzlar va pulsar hodisalari",
+    "Astronomiya: Galaktikalar to'qnashuvi, relyikt nurlanish va qora tuynuklar",
     "Kosmonavtika: Mashhur kosmik zondlar (Voyager, Cassini, James Webb) missiyalari",
-    "Fizika: Nisbiylik nazariyasi, optik illyuziyalar va kvant kashfiyotlari",
-    "Kimyo: Davriy jadvaldagi radioaktiv elementlar va kutilmagan reaksiyalar",
+    "Fizika: Nisbiylik nazariyasi, optik hodisalar va yorug'lik tabiati",
+    "Fizika: Termodinamika qonunlari va zamonaviy kvant kashfiyotlari",
+    "Kimyo: Davriy jadvaldagi radioaktiv elementlar va ularning ishlatilishi",
+    "Kimyo: Kundalik hayotdagi g'aroyib kimyoviy reaksiyalar va qotishmalar",
     "Inson biologiyasi: Neyronlar, gormonlar, miya tuzilishi va qon aylanishi",
-    "Zoologiya va Botanika: Dunyodagi eng zaharli va noyob tirik mavjudotlar",
-    "Geografiya: Dengizga chiqish yo'li yo'q davlatlar, kutilmagan eksklavlar",
+    "Biologiya va Zoologiya: Dengiz tubi (Abissal) mavjudotlari va ularning moslashuvi",
+    "Biologiya va Botanika: Dunyodagi eng zaharli, kamyob va qadimgi o'simliklar",
+    "Geografiya: Dengizga chiqish yo'li yo'q davlatlar, kutilmagan eksklavlar va chegaralar",
+    "Geografiya: Dunyodagi eng xavfli vulqonlar, kanyonlar va tektonik yoriqlar",
     "Texnologiya: Internet protokollari, kriptografiya va kompyuter tarixi",
+    "Adabiyot: Mumtoz adabiyot durdonalari va jahon falsafasi",
     "Mantiq va Deduksiya: Detektiv uslubidagi faktlar va chalkash mantiqiy masalalar"
 ]
 
-# In-memory question buffer (fills in batches of 8)
-question_queue = []
+QUESTION_ANGLES = [
+    "Kutilmagan, ko'pchilik noto'g'ri taxmin qiladigan paradoksal fakt",
+    "Aniq bir kashfiyot yoki tarixiy burilish ortida turgan shaxs",
+    "Hodisaning sabab-oqibat mexanizmi",
+    "Atamaning yoki nomning kelib chiqish tarixi (etimologiyasi)",
+    "Noodatiy, kamchilik biladigan statistik yoki ilmiy qonuniyat"
+]
 
 round_state = {
     "active": False,
@@ -79,13 +88,13 @@ round_state = {
     "attempted_users": set()
 }
 
-# --- Keep-Alive Web Server ---
+# --- Keep-Alive Web Server for Render ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Quiz bot is running 24/7!")
+        self.wfile.write(b"Quiz bot is running 24/7 on Groq!")
         
     def do_HEAD(self):
         self.send_response(200)
@@ -95,21 +104,7 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
     server.serve_forever()
 
-# --- API Key Rotation ---
-def get_active_gemini_url():
-    global current_key_index
-    if not API_KEYS:
-        return ""
-    key = API_KEYS[current_key_index % len(API_KEYS)]
-    return f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={key}"
-
-def rotate_key():
-    global current_key_index
-    if len(API_KEYS) > 1:
-        current_key_index = (current_key_index + 1) % len(API_KEYS)
-        logger.warning(f"Rotating to next API key index: {current_key_index + 1}/{len(API_KEYS)}")
-
-# --- Telegram Storage ---
+# --- Telegram Storage Helpers ---
 async def get_or_create_leaderboard(bot):
     chat = await bot.get_chat(GROUP_CHAT_ID)
     pinned = chat.pinned_message
@@ -195,89 +190,74 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         logger.error(f"Failed to update pin: {e}")
         return ""
 
-# --- Batch Question Generator (8 Questions in 1 API Call) ---
-def fetch_batch_questions(recent_history):
-    history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "Yo'q"
-    sampled_topics = random.sample(TOPIC_POOLS, 6)
+# --- Question Generator using Groq (Llama 3.3 70B) ---
+def fetch_question(q_num, recent_history):
+    chosen_topic = random.choice(TOPIC_POOLS)
+    chosen_angle = random.choice(QUESTION_ANGLES)
+    cache_buster = f"{int(time.time())}_{random.randint(1000, 9999)}"
+    history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "Hozircha yo'q"
 
     prompt = f"""
-    Sen Telegram intellektual viktorinasi uchun 8 TA HAR XIL va UNIKAL savollar to'plamini tuzishing kerak.
+    Sen Telegram viktorinasi uchun ORIGINAL va TAKRORLANMAS savol tuzuvchisan.
+    Hozirgi savol raqami: #{q_num} / 1 000 000.
+    Unikal kalit: {cache_buster}.
     
-    MAVZULAR: {', '.join(sampled_topics)}.
+    MAVZU: {chosen_topic}
+    USLUB: {chosen_angle}
     
     QAT'IY QOIDALAR:
-    1. Yaqinda berilgan savollarni takrorlama:
+    1. QUYIDAGI SO'NGGI SAVOLLARNI VA ULARNING JAVOBLARINI ASLO TAKRORLAMA:
     {history_block}
-    2. Eng sodda, qolipli savollarni (Merkuriy, Everest, Temur qachon tug'ilgan) aslo berma.
-    3. Savollar o'rta va qiyin, faktik 100% to'g'ri bo'lsin.
-    4. Har bir savolda 4 ta variant (A, B, C, D) bo'lsin.
     
-    Faqat quyidagi JSON formatida 8 ta savoldan iborat LIST qaytar:
-    [
-        {{
-            "subject": "Fan",
-            "question": "Savol matni",
-            "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
-            "correct": "A",
-            "explanation": "Qisqa tushuntirish"
-        }},
-        ...
-    ]
-    """
-
-    attempts = len(API_KEYS) or 1
-    for _ in range(attempts):
-        url = get_active_gemini_url()
-        try:
-            res = requests.post(
-                url,
-                json={
-                    "contents": [{"parts": [{"text": prompt}]}],
-                    "generationConfig": {
-                        "response_mime_type": "application/json",
-                        "temperature": 1.15
-                    }
-                },
-                timeout=30
-            )
-            data = res.json()
-            if "error" in data:
-                logger.error(f"Gemini API Error: {data['error'].get('message')}")
-                rotate_key()
-                continue
-                
-            raw_text = data['candidates'][0]['content']['parts'][0]['text'].strip()
-            if raw_text.startswith("```"):
-                raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text)
-                raw_text = re.sub(r"\n?```$", "", raw_text)
-                
-            batch = json.loads(raw_text)
-            if isinstance(batch, list) and len(batch) > 0:
-                logger.info(f"Successfully generated batch of {len(batch)} questions!")
-                return batch
-        except Exception as e:
-            logger.warning(f"Batch request failed on current key: {e}")
-            rotate_key()
-
-    return []
-
-def get_next_question(recent_history):
-    global question_queue
-    if not question_queue:
-        logger.info("Question queue empty. Requesting new batch from Gemini...")
-        question_queue = fetch_batch_questions(recent_history)
-        
-    if question_queue:
-        return question_queue.pop(0)
+    2. Eng sodda, qolipli maktab savollarini (Merkuriy, Everest, Temur qachon tug'ilgan, Brom, Simob) aslo berma!
+    3. Savol faktik jihatdan 100% to'g'ri, chuqur, o'rta yoki qiyin darajada bo'lsin.
+    4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
     
-    # Emergency fallback if all keys are unavailable
-    return {
-        "subject": "Tarix",
-        "question": "1402-yilgi Anqara jangida Amir Temur qo'shinida qaysi hayvonlardan qurol sifatida foydalanilgan?",
-        "options": {"A": "Jangovar fillar", "B": "Otliq tuyalar", "C": "Burgutlar", "D": "Qoplonlar"},
+    Faqat quyidagi JSON formatida to'g'ridan-to'g'ri javob ber (hech qanday markdown kod blokisiz):
+    {{
+        "subject": "{chosen_topic.split(':')[0].strip()}",
+        "question": "Savol matni o'zbek tilida",
+        "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
         "correct": "A",
-        "explanation": "Amir Temur Hindiston yurishida qo'lga kiritilgan jangovar fillardan foydalangan."
+        "explanation": "Qisqa tushuntirish (1-2 gap)"
+    }}
+    """
+    
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
     }
+    
+    payload = {
+        "model": "llama-3.3-70b-versatile",
+        "messages": [
+            {"role": "system", "content": "Faqat to'g'ridan-to'g'ri yaroqli JSON qaytar."},
+            {"role": "user", "content": prompt}
+        ],
+        "response_format": {"type": "json_object"},
+        "temperature": 0.85
+    }
+    
+    try:
+        res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=15)
+        data = res.json()
+        if "error" in data:
+            logger.error(f"Groq API Error: {data['error'].get('message')}")
+            raise ValueError(data['error'].get('message'))
+            
+        raw_text = data['choices'][0]['message']['content'].strip()
+        parsed = json.loads(raw_text)
+        logger.info(f"Groq successfully generated question: {parsed.get('question')[:40]}...")
+        return parsed
+    except Exception as e:
+        logger.error(f"Groq request failed: {e}", exc_info=True)
+        return {
+            "subject": "Tarix",
+            "question": "Qaysi xonlik davrida 'Qo'qon adabiy muhiti' o'zining eng yuqori cho'qqisiga erishgan?",
+            "options": {"A": "Umarxon", "B": "Madalixon", "C": "Olimxon", "D": "Xudoyorxon"},
+            "correct": "A",
+            "explanation": "Amir Umarxon davrida Qo'qonda Fazliy, Nodira kabi 70 dan ortiq ijodkorlar faoliyat olib borgan."
+        }
 
 # --- Round Engine ---
 async def post_hourly_question(app):
@@ -286,7 +266,7 @@ async def post_hourly_question(app):
     pin = await get_or_create_leaderboard(app.bot)
     q_num, _, history = parse_pin_data(getattr(pin, "text", "") or "")
     
-    data = get_next_question(history)
+    data = fetch_question(q_num, history)
     
     round_state["active"] = True
     round_state["q_num"] = q_num
@@ -324,7 +304,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     match = ANSWER_PATTERN.match(text)
     if not match:
-        return  # Rejects "a b c d", "abcd", or conversational text
+        return  # Rejects "a b c d", full words, or chatter
 
     user = update.message.from_user
     if user.id in round_state["attempted_users"]:
