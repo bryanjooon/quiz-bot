@@ -42,7 +42,7 @@ CYRILLIC_TO_LATIN = {
     'D': 'D', 'd': 'D', 'Д': 'D', 'д': 'D'
 }
 
-# Strict single-letter match: rejects "a b c d", "abcd", or random sentences
+# Strict single-letter match: rejects "a b c d", "abcd", or random chatter
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
 TOPIC_POOLS = [
@@ -184,7 +184,7 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         if new_question_summary:
             clean_summary = new_question_summary.replace("\n", " ").strip()[:90]
             history.insert(0, clean_summary)
-            history = history[:15]
+            history = history[:15]  # Keep last 15 questions in memory
             
         scores_body = format_top10_scores(scores_dict)
         history_lines = [f"• {item}" for item in history] if history else ["• Savollar tarixi boshlanmoqda..."]
@@ -247,6 +247,7 @@ def fetch_question(q_num, recent_history):
     2. Eng sodda, qolipli maktab savollarini (Merkuriy, Everest, Temur qachon tug'ilgan, Umarxon, Brom, Simob) aslo berma!
     3. Savol faktik jihatdan 100% to'g'ri, chuqur, o'rta yoki qiyin darajada bo'lsin.
     4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
+    5. islom dini tarixi va islom dini haqida kopro bosin frequency har 4tada bitta
     
     Faqat quyidagi JSON formatida to'g'ridan-to'g'ri javob ber (hech qanday markdown kod blokisiz):
     {{
@@ -343,16 +344,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     user = update.message.from_user
-    
-    # 1. If user already attempted, silently delete their spam message and ignore
+
+    # Repeat attempts: silently delete and say nothing
     if user.id in round_state["attempted_users"]:
         try:
             await update.message.delete()
         except Exception as e:
-            logger.warning(f"Could not delete repeat attempt: {e}")
+            logger.warning(f"Could not delete spam attempt: {e}")
         return
 
-    # Mark user as having played this round
+    # First attempt: register user attempt
     round_state["attempted_users"].add(user.id)
     raw_choice = match.group(1)
     choice = CYRILLIC_TO_LATIN.get(raw_choice, raw_choice).upper()
@@ -387,12 +388,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
             await update.message.reply_text(reply)
         else:
-            # 2. If their first attempt is WRONG, silently delete it to prevent chat clutter
-            try:
-                await update.message.delete()
-            except Exception as e:
-                logger.warning(f"Could not delete wrong attempt: {e}")
-                
+            # Announce first incorrect attempt so the player knows they are locked out
+            await update.message.reply_text(f"❌ Noto‘g‘ri, {user.first_name}! Bu soat uchun o‘yindan chiqdingiz.")
     except Exception as e:
         logger.error(f"Error handling answer reply: {e}", exc_info=True)
 
@@ -400,12 +397,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
-        
-    # Restrict to Admins only
+    # Non-admin usage: silently delete command
     if not await is_admin(update, context):
-        await update.message.reply_text("⛔ Bu buyruq faqat guruh adminlari uchun!")
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
         return
-        
+
     await update.message.reply_text("🧪 Test savoli ishga tushirilmoqda...")
     await post_hourly_question(context.application)
 
@@ -428,8 +427,12 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
     
+    # Non-admin usage: silently delete command
     if not await is_admin(update, context):
-        await update.message.reply_text("⛔ Bu buyruq faqat guruh adminlari uchun!")
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
         return
 
     if not round_state["active"]:
@@ -445,7 +448,6 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     pin = await get_or_create_leaderboard(context.bot)
     q_num, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
     
-    # Progress question number and record history without altering point totals
     await update_pin(
         context.bot,
         next_q_num=q_num + 1,
@@ -465,14 +467,17 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
     
+    # Non-admin usage: silently delete command
     if not await is_admin(update, context):
-        await update.message.reply_text("⛔ Bu buyruq faqat guruh adminlari uchun!")
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
         return
 
     pin = await get_or_create_leaderboard(context.bot)
     q_num, _, _ = parse_pin_data(getattr(pin, "text", "") or "")
     
-    # Clear all player scores while keeping current round number and history intact
     await update_pin(
         context.bot,
         next_q_num=q_num,
