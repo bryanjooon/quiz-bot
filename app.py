@@ -186,7 +186,6 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         logger.error(f"Failed to update pin: {e}")
         return ""
 
-# --- Question Generator with History Memory & High Temperature ---
 def fetch_question(q_num, recent_history):
     chosen_topic = random.choice(TOPIC_POOLS)
     chosen_angle = random.choice(QUESTION_ANGLES)
@@ -200,30 +199,23 @@ def fetch_question(q_num, recent_history):
     Tasodifiy kalit: {cache_buster}.
     
     MAVZU: {chosen_topic}
-    YONDASHUV USLUBI: {chosen_angle}
+    USLUB: {chosen_angle}
     
-    QAT'IY QOIDALAR (BUZILMASIN):
-    1. QUYIDAGI YAQUNDA BERILGAN SAVOLLARNI VA ULARNING MAVZUSINI MUTLAQO TAKRORLAMA:
+    QAT'IY QOIDALAR:
+    1. QUYIDAGI YAQUNDA BERILGAN SAVOLLARNI VA ULARNING MAVZUSINI TAKRORLAMA:
     {history_block}
     
-    2. ENG SODDA VA O'TA MASHHUR SAVOLLARNI ASLO BERMA:
-       - Quyoshga eng yaqin sayyora (Merkuriy)
-       - Xona haroratidagi suyuq metall yoki nometall (Simob, Brom)
-       - Eng baland tog' (Everest), eng chuqur ko'l (Baykal), eng katta okean
-       - Alisher Navoiy Hamsasi nechta doston, Amir Temur qachon tug'ilgan
-       - Inson tanasidagi eng katta suyak yoki a'zo
-       Bunday qolipli savollar taqiqlangan!
-       
+    2. Eng sodda, qolipli savollarni aslo berma (Merkuriy, Everest, Baykal, Temur qachon tug'ilgan kabilar taqiqlanadi).
     3. Savol aqlli, qiziqarli, o'rta yoki qiyin darajada bo'lsin.
     4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
     
-    Faqat quyidagi JSON formatida to'g'ridan-to'g'ri javob ber (hech qanday markdown bloklarisiz):
+    Faqat quyidagi JSON formatida to'g'ridan-to'g'ri javob ber:
     {{
         "subject": "{chosen_topic.split(':')[0].strip()}",
         "question": "Savol matni o'zbek tilida",
         "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
         "correct": "A",
-        "explanation": "Qisqa ilmiy/tarixiy faktli tushuntirish (1-2 gap)"
+        "explanation": "Qisqa tushuntirish (1-2 gap)"
     }}
     """
     
@@ -238,26 +230,50 @@ def fetch_question(q_num, recent_history):
                     "top_p": 0.95
                 }
             },
-            timeout=12
+            timeout=30  # Expanded from 12s to prevent premature timeouts
         )
         data = res.json()
         if "error" in data:
             logger.error(f"Google API Error: {data['error'].get('message')}")
             raise ValueError(data['error'].get('message'))
             
-        raw_json = data['candidates'][0]['content']['parts'][0]['text']
-        return json.loads(raw_json)
+        raw_text = data['candidates'][0]['content']['parts'][0]['text'].strip()
+        
+        # Clean any accidental markdown wrap
+        if raw_text.startswith("```"):
+            raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text)
+            raw_text = re.sub(r"\n?```$", "", raw_text)
+            
+        return json.loads(raw_text)
+        
     except Exception as e:
-        logger.warning(f"Gemini API request failed: {e}")
-        # Varied dynamic fallback
-        return {
-            "subject": "Tarix",
-            "question": "1402-yilgi Anqara jangida Amir Temur qo'shinida qaysi hayvonlardan jangovar qurol sifatida foydalanilgan?",
-            "options": {"A": "Jangovar fillar", "B": "Otliq tuyalar", "C": "Burgutlar", "D": "Qoplonlar"},
-            "correct": "A",
-            "explanation": "Amir Temur Hindiston yurishida qo'lga kiritgan maxsus himoyalangan jangovar fillardan Boyazidga qarshi foydalangan."
-        }
-
+        logger.error(f"Gemini API request failed completely: {e}", exc_info=True)
+        
+        # Multi-question emergency pool so it never repeats the same fallback
+        emergency_pool = [
+            {
+                "subject": "Tarix",
+                "question": "Qaysi mashhur xonlik davrida 'Qo'qon adabiy muhiti' o'zining eng yuqori cho'qqisiga erishgan?",
+                "options": {"A": "Umarxon", "B": "Madalixon", "C": "Olimxon", "D": "Xudoyorxon"},
+                "correct": "A",
+                "explanation": "Amir Umarxon (taxallusi Amiriy) davrida Qo'qonda Fazliy, Nodira kabi 70 dan ortiq shoirlar ijod qilgan."
+            },
+            {
+                "subject": "Astronomiya",
+                "question": "Quyosh tizimida o'z o'qi atrofida soat millari yo'nalishida (teskari) aylanuvchi sayyora qaysi?",
+                "options": {"A": "Venera", "B": "Neptun", "C": "Yupiter", "D": "Mars"},
+                "correct": "A",
+                "explanation": "Venera boshqa barcha sayyoralardan farqli ravishda sharqdan g'arbga qarab teskari aylanadi."
+            },
+            {
+                "subject": "Fizika",
+                "question": "Absolyut nol harorat Selsiy shkalasi bo'yicha necha darajaga teng?",
+                "options": {"A": "-273.15°C", "B": "-100°C", "C": "-300°C", "D": "-212°C"},
+                "correct": "A",
+                "explanation": "0 Kelvin absolyut nol hisoblanadi va u -273.15°C ga to'g'ri keladi."
+            }
+        ]
+        return random.choice(emergency_pool)
 # --- Round Engine ---
 async def post_hourly_question(app):
     global round_state
