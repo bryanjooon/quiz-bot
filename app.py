@@ -19,7 +19,7 @@ from telegram.ext import (
     ContextTypes
 )
 
-# --- Logging ---
+# --- Logging Configuration ---
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
     level=logging.INFO
@@ -28,12 +28,14 @@ logger = logging.getLogger(__name__)
 
 # --- Environment Configuration ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 GROUP_CHAT_ID = int(os.getenv("TELEGRAM_GROUP_ID"))
 PORT = int(os.environ.get("PORT", 10000))
 TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
 
-GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+# Support single key or comma-separated multiple keys
+raw_keys = os.getenv("GEMINI_API_KEYS", os.getenv("GEMINI_API_KEY", ""))
+API_KEYS = [k.strip() for k in raw_keys.split(",") if k.strip()]
+current_key_index = 0
 
 CYRILLIC_TO_LATIN = {
     'А': 'A', 'а': 'A',
@@ -41,22 +43,22 @@ CYRILLIC_TO_LATIN = {
     'С': 'C', 'с': 'C',
     'D': 'D', 'd': 'D', 'Д': 'D', 'д': 'D'
 }
-# Strict regex: Matches only single letter choice; rejects "a b c d" or conversational sentences
-ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
+ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])(\b|[.)\s]|$)")
 
+# --- Anti-Repetition Category Matrix ---
 TOPIC_POOLS = [
     "O'zbekiston tarixi: Qadimgi Baqtriya, So'g'diyona va Kushonlar davri",
     "O'zbekiston tarixi: Somoniylar, Qoraxoniylar va Xorazmshohlar davlati",
     "O'zbekiston tarixi: Amir Temur harbiy yurishlari va diplomatik aloqalari",
     "O'zbekiston tarixi: Turkiston jadidchilik harakati va 20-asr fojialari",
     "Jahon tarixi: Qadimgi Mesopotamiya, Bobil va Finikiya sivilizatsiyasi",
-    "Jahon tarixi: Qadimgi Rim senati, imperatorlari va mashhur janglari",
+    "Jahon tarixi: Qadimgi Rim senati, imperatorlari va muhim janglari",
     "Jahon tarixi: O'rta asrlar Yevropasi, Salib yurishlari va feodalizm",
     "Jahon tarixi: Birinchi va Ikkinchi jahon urushidagi kam ma'lum burilish nuqtalari",
     "Astronomiya: Ekzosayyoralar, neytron yulduzlar va pulsar hodisalari",
     "Astronomiya: Galaktikalar to'qnashuvi, relyikt nurlanish va qora tuynuklar",
     "Kosmonavtika: Mashhur kosmik zondlar (Voyager, Cassini, James Webb) missiyalari",
-    "Fizika: Nisbiylik nazariyasi, optik hodisalar va yorug'lik tabiati",
+    "Fizika: Nisbiylik nazariyasi, optik illyuziyalar va yorug'lik tabiati",
     "Fizika: Termodinamika qonunlari va zamonaviy kvant kashfiyotlari",
     "Kimyo: Davriy jadvaldagi radioaktiv elementlar va ularning ishlatilishi",
     "Kimyo: Kundalik hayotdagi g'aroyib kimyoviy reaksiyalar va qotishmalar",
@@ -66,8 +68,8 @@ TOPIC_POOLS = [
     "Geografiya: Dengizga chiqish yo'li yo'q davlatlar, kutilmagan eksklavlar va chegaralar",
     "Geografiya: Dunyodagi eng xavfli vulqonlar, kanyonlar va tektonik yoriqlar",
     "Texnologiya: Internet protokollari, kriptografiya va kompyuter tarixi",
-    "Adabiyot: Mumtoz adabiyot durdonalari va jahon falsafasi",
-    "Mantiq va Deduksiya: Detektiv uslubidagi faktlar va chalkash mantiqiy masalalar"
+    "Adabiyot: Antik davr falsafasi va Sharq mumtoz adabiyoti durdonalari",
+    "Mantiq va Deduksiya: Detektiv uslubidagi faktlar va chuqur mantiqiy masalalar"
 ]
 
 QUESTION_ANGLES = [
@@ -94,7 +96,7 @@ class HealthHandler(BaseHTTPRequestHandler):
         self.send_response(200)
         self.send_header("Content-type", "text/plain")
         self.end_headers()
-        self.wfile.write(b"Quiz bot is running 24/7 on Groq!")
+        self.wfile.write(b"Quiz bot is running 24/7!")
         
     def do_HEAD(self):
         self.send_response(200)
@@ -104,7 +106,21 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
     server.serve_forever()
 
-# --- Telegram Storage Helpers ---
+# --- API Key Management ---
+def get_active_gemini_url():
+    global current_key_index
+    if not API_KEYS:
+        return ""
+    key = API_KEYS[current_key_index % len(API_KEYS)]
+    return f"https://generativelanguage.googleapis.com/v1beta/models/gemini-3.8-flash:generateContent?key={key}"
+
+def rotate_key():
+    global current_key_index
+    if len(API_KEYS) > 1:
+        current_key_index = (current_key_index + 1) % len(API_KEYS)
+        logger.warning(f"Rotating to next API key index: {current_key_index + 1}/{len(API_KEYS)}")
+
+# --- Persistent Data Management in Telegram ---
 async def get_or_create_leaderboard(bot):
     chat = await bot.get_chat(GROUP_CHAT_ID)
     pinned = chat.pinned_message
@@ -160,7 +176,7 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         if new_question_summary:
             clean_summary = new_question_summary.replace("\n", " ").strip()[:90]
             history.insert(0, clean_summary)
-            history = history[:15]
+            history = history[:15]  # Keep last 15 unique questions in history
             
         if scores_dict:
             sorted_scores = sorted(scores_dict.items(), key=lambda x: x[1], reverse=True)
@@ -190,7 +206,7 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         logger.error(f"Failed to update pin: {e}")
         return ""
 
-# --- Question Generator using Groq (Llama 3.3 70B) ---
+# --- Question Generator ---
 def fetch_question(q_num, recent_history):
     chosen_topic = random.choice(TOPIC_POOLS)
     chosen_angle = random.choice(QUESTION_ANGLES)
@@ -200,7 +216,7 @@ def fetch_question(q_num, recent_history):
     prompt = f"""
     Sen Telegram viktorinasi uchun ORIGINAL va TAKRORLANMAS savol tuzuvchisan.
     Hozirgi savol raqami: #{q_num} / 1 000 000.
-    Unikal kalit: {cache_buster}.
+    Tasodifiy kalit: {cache_buster}.
     
     MAVZU: {chosen_topic}
     USLUB: {chosen_angle}
@@ -209,8 +225,8 @@ def fetch_question(q_num, recent_history):
     1. QUYIDAGI SO'NGGI SAVOLLARNI VA ULARNING JAVOBLARINI ASLO TAKRORLAMA:
     {history_block}
     
-    2. Eng sodda, qolipli maktab savollarini (Merkuriy, Everest, Temur qachon tug'ilgan, Brom, Simob) aslo berma!
-    3. Savol faktik jihatdan 100% to'g'ri, chuqur, o'rta yoki qiyin darajada bo'lsin.
+    2. Eng sodda, maktab darsligidagi o'ta mashhur faktlarni berma (Merkuriy, Everest, Baykal, Temur qachon tug'ilgan taqiqlanadi).
+    3. Savol faktik jihatdan 100% to'g'ri, chuqur va qiziqarli bo'lsin.
     4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
     
     Faqat quyidagi JSON formatida to'g'ridan-to'g'ri javob ber (hech qanday markdown kod blokisiz):
@@ -223,41 +239,56 @@ def fetch_question(q_num, recent_history):
     }}
     """
     
-    headers = {
-        "Authorization": f"Bearer {GROQ_API_KEY}",
-        "Content-Type": "application/json"
-    }
-    
-    payload = {
-        "model": "llama-3.3-70b-versatile",
-        "messages": [
-            {"role": "system", "content": "Faqat to'g'ridan-to'g'ri yaroqli JSON qaytar."},
-            {"role": "user", "content": prompt}
-        ],
-        "response_format": {"type": "json_object"},
-        "temperature": 0.85
-    }
-    
-    try:
-        res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=15)
-        data = res.json()
-        if "error" in data:
-            logger.error(f"Groq API Error: {data['error'].get('message')}")
-            raise ValueError(data['error'].get('message'))
-            
-        raw_text = data['choices'][0]['message']['content'].strip()
-        parsed = json.loads(raw_text)
-        logger.info(f"Groq successfully generated question: {parsed.get('question')[:40]}...")
-        return parsed
-    except Exception as e:
-        logger.error(f"Groq request failed: {e}", exc_info=True)
-        return {
+    attempts = len(API_KEYS) or 1
+    for _ in range(attempts):
+        url = get_active_gemini_url()
+        try:
+            res = requests.post(
+                url,
+                json={
+                    "contents": [{"parts": [{"text": prompt}]}],
+                    "generationConfig": {
+                        "response_mime_type": "application/json",
+                        "temperature": 1.15,
+                        "top_p": 0.95
+                    }
+                },
+                timeout=25
+            )
+            data = res.json()
+            if "error" in data:
+                logger.error(f"Gemini API Error: {data['error'].get('message')}")
+                rotate_key()
+                continue
+                
+            raw_text = data['candidates'][0]['content']['parts'][0]['text'].strip()
+            if raw_text.startswith("```"):
+                raw_text = re.sub(r"^```(?:json)?\n?", "", raw_text)
+                raw_text = re.sub(r"\n?```$", "", raw_text)
+                
+            return json.loads(raw_text)
+        except Exception as e:
+            logger.warning(f"Request failed: {e}")
+            rotate_key()
+
+    # Emergency fallback pool
+    emergency_pool = [
+        {
             "subject": "Tarix",
-            "question": "Qaysi xonlik davrida 'Qo'qon adabiy muhiti' o'zining eng yuqori cho'qqisiga erishgan?",
+            "question": "Qaysi mashhur xonlik davrida 'Qo'qon adabiy muhiti' o'zining eng yuqori cho'qqisiga erishgan?",
             "options": {"A": "Umarxon", "B": "Madalixon", "C": "Olimxon", "D": "Xudoyorxon"},
             "correct": "A",
             "explanation": "Amir Umarxon davrida Qo'qonda Fazliy, Nodira kabi 70 dan ortiq ijodkorlar faoliyat olib borgan."
+        },
+        {
+            "subject": "Astronomiya",
+            "question": "Quyosh tizimida o'z o'qi atrofida soat millari yo'nalishida (teskari) aylanuvchi sayyora qaysi?",
+            "options": {"A": "Venera", "B": "Neptun", "C": "Yupiter", "D": "Mars"},
+            "correct": "A",
+            "explanation": "Venera sharqdan g'arbga qarab teskari aylanadi."
         }
+    ]
+    return random.choice(emergency_pool)
 
 # --- Round Engine ---
 async def post_hourly_question(app):
@@ -304,7 +335,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     match = ANSWER_PATTERN.match(text)
     if not match:
-        return  # Rejects "a b c d", full words, or chatter
+        return
 
     user = update.message.from_user
     if user.id in round_state["attempted_users"]:
