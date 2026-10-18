@@ -24,7 +24,7 @@ GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 GROUP_CHAT_ID = int(os.getenv("TELEGRAM_GROUP_ID"))
 PORT = int(os.environ.get("PORT", 10000))
 TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
-GEMINI_URL = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key={GEMINI_API_KEY}"
+
 CYRILLIC_TO_LATIN = {
     'А': 'A', 'а': 'A',
     'В': 'B', 'в': 'B',
@@ -42,7 +42,9 @@ round_state = {
     "attempted_users": set()
 }
 
-# --- Keep-Alive Web Server ---
+ACTIVE_MODEL = "gemini-2.0-flash"
+
+# --- Web Server for Keep-Alive ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -58,24 +60,59 @@ def run_web_server():
     server = HTTPServer(("0.0.0.0", PORT), HealthHandler)
     server.serve_forever()
 
+# --- Auto-Detect Valid Google Model ---
+def detect_gemini_model():
+    global ACTIVE_MODEL
+    try:
+        url = f"https://generativelanguage.googleapis.com/v1beta/models?key={GEMINI_API_KEY}"
+        res = requests.get(url, timeout=10)
+        data = res.json()
+        if "models" in data:
+            available = []
+            for m in data["models"]:
+                if "generateContent" in m.get("supportedGenerationMethods", []):
+                    clean_name = m["name"].replace("models/", "")
+                    available.append(clean_name)
+            
+            logger.info(f"Available models for this API key: {available}")
+            
+            # Prefer flash models
+            for model_name in available:
+                if "flash" in model_name:
+                    ACTIVE_MODEL = model_name
+                    logger.info(f"--> Selected Gemini Model: {ACTIVE_MODEL}")
+                    return
+            
+            if available:
+                ACTIVE_MODEL = available[0]
+                logger.info(f"--> Selected Gemini Model: {ACTIVE_MODEL}")
+                return
+        else:
+            logger.error(f"Could not fetch models list: {data}")
+    except Exception as e:
+        logger.error(f"Auto-detect model failed: {e}")
+
 # --- Question Generator ---
 def fetch_question(q_num):
     prompt = f"""
-    Telegram viktorinasi uchun tasodifiy mavzuda savol tuz. Savol raqami: {q_num}/1000000.
-    Fanlar: O'zbekiston tarixi, Jahon tarixi, Geografiya, Astronomiya, Fan-texnika, Biologiya, Kimyo, Mantiq.
-    Har gal har xil qiziqarli fan va savol tanla.
-    Faqat to'g'ridan-to'g'ri JSON formatda qaytar:
+    Sen Telegram intellektual viktorinasi uchun savol tuzuvchisan.
+    Hozirgi savol raqami: {q_num} / 1000000.
+    Har xil qiziqarli fan tanla: O'zbekiston tarixi, Jahon tarixi, Geografiya, Astronomiya, Fan-texnika, Biologiya, Kimyo, Mantiq.
+    Qiyinlik: aralash (oson, o'rta, qiyin).
+    
+    Faqat quyidagi JSON formatida to'g'ridan-to'g'ri javob qaytar (markdown code blocksiz):
     {{
-        "subject": "Fan",
+        "subject": "Fan nomi",
         "question": "Savol matni o'zbek tilida",
         "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
         "correct": "A",
         "explanation": "Qisqa tushuntirish"
     }}
     """
+    url = f"https://generativelanguage.googleapis.com/v1beta/models/{ACTIVE_MODEL}:generateContent?key={GEMINI_API_KEY}"
     try:
         res = requests.post(
-            GEMINI_URL,
+            url,
             json={"contents": [{"parts": [{"text": prompt}]}], "generationConfig": {"response_mime_type": "application/json"}},
             timeout=10
         )
@@ -95,7 +132,8 @@ def fetch_question(q_num):
             "correct": "B",
             "explanation": "Merkuriy Quyosh tizimidagi eng yaqin sayyoradir."
         }
-# --- Pinned Leaderboard ---
+
+# --- Pinned Leaderboard Handler ---
 async def get_or_create_leaderboard(bot):
     chat = await bot.get_chat(GROUP_CHAT_ID)
     pinned = chat.pinned_message
@@ -240,6 +278,8 @@ async def scheduler(app):
         await asyncio.sleep(5)
 
 async def on_startup(app):
+    # Detect supported models before launching scheduler
+    detect_gemini_model()
     asyncio.create_task(scheduler(app))
 
 if __name__ == "__main__":
