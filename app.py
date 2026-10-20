@@ -192,10 +192,10 @@ ISLAMIC_TOPIC_POOLS = [
 
 QUESTION_ANGLES = [
     "Kutilmagan, ko'pchilik noto'g'ri taxmin qiladigan paradoksal fakt",
-    "Aniq bir kashfiyot yoki tarixiy burilish ortida turgan shaxs",
-    "Hodisaning sabab-oqibat mexanizmi",
-    "Atamaning yoki nomning kelib chiqish tarixi (etimologiyasi)",
-    "Noodatiy, kamchilik biladigan statistik yoki ilmiy qonuniyat"
+    "Tarixiy burilish yasagan keskin voqea yoki strategik qaror",
+    "Hodisa yoki qonuniyatning sabab-oqibat mexanizmi",
+    "Kamchilik biladigan, lekin muhim ahamiyatga ega ilmiy kashfiyot",
+    "Mantiqiy deduksiya va chuqur tahlilni talab qiluvchi jumboq"
 ]
 
 round_state = {
@@ -363,14 +363,15 @@ def fetch_question(q_num, recent_history):
     MAVZU: {chosen_topic}
     USLUB: {chosen_angle}
     
-    QAT'IY QOIDALAR:
-    1. QUYIDAGI SO'NGGI SAVOLLARNI VA ULARNING JAVOBLARINI ASLO TAKRORLAMA:
+    QAT'IY TAQIQLAR VA QOIDALAR:
+    1. LINGVISTIK VA SO'Z KELIB CHIQISHI SAVOLLARI QAT'IYAN TAQIQLANADI:
+       - 'Qaysi tildan olingan?', 'So'zning ma'nosi nima?', 'Atama qayerdan kelib chiqqan?' (masalan: radiatsiya, atom, biologiya so'zi kelib chiqishi) kabi zerikarli etimologik savollarni ASLO berma!
+    2. SO'NGGI SAVOLLAR VA JAVOBLAR TAKRORLANMASIN:
     {history_block}
-    
-    2. Eng sodda, qolipli maktab savollarini (Merkuriy, Everest, Temur qachon tug'ilgan, Umarxon, Brom, Simob) aslo berma!
-    3. Agar mavzu Islom dini yoki tarixiga oid bo'lsa, savol faqat ishonchli (sahih) manbalar asosida, hurmat bilan va nozik ixtilofli masalalarga kirmasdan tuzilsin.
-    4. Savol faktik jihatdan 100% to'g'ri, chuqur, o'rta yoki qiyin darajada bo'lsin.
-    5. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
+    3. Eng sodda, qolipli maktab savollarini (Merkuriy, Everest, Temur qachon tug'ilgan, Umarxon, Brom, Simob) aslo berma!
+    4. Savol jonli, qiziqarli, voqea-hodisalarga yoki aniq mexanizmlarga asoslangan faktik savol bo'lsin.
+    5. Agar mavzu Islom dini yoki tarixiga oid bo'lsa, savol faqat ishonchli (sahih) manbalar asosida, hurmat bilan va nozik ixtilofli masalalarga kirmasdan tuzilsin.
+    6. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
     
     Faqat quyidagi JSON formatida to'g'ridan-to'g'ri javob ber (hech qanday markdown kod blokisiz):
     {{
@@ -412,11 +413,11 @@ def fetch_question(q_num, recent_history):
     except Exception as e:
         logger.error(f"Groq request failed: {e}", exc_info=True)
         return {
-            "subject": "Islom tarixi",
-            "question": "Payg'ambarimiz (s.a.v.) Madinaga hijrat qilganlarida ularning tuyalari dastlab kimning hovlisiga cho'kkan?",
-            "options": {"A": "Abu Ayyub al-Ansoriy", "B": "Sa'd ibn Uboda", "C": "As'ad ibn Zurora", "D": "Usmon ibn Maz'un"},
+            "subject": "Fizika",
+            "question": "Qora tuynukning nurni ham o'ziga tortib, tashqariga chiqarmaydigan nazariy chegarasi qanday ataladi?",
+            "options": {"A": "Hodisalar gorizonti", "B": "Ergosfera", "C": "Singulyarlik nuqtasi", "D": "Akkretsiya diski"},
             "correct": "A",
-            "explanation": "Payg'ambarimiz (s.a.v.) Madinaga yetib kelganlarida Qasva nomli tuyalari Abu Ayyub al-Ansoriy (r.a.) uyining oldiga cho'kkan."
+            "explanation": "Hodisalar gorizonti — bu qora tuynukning tortishish kuchi shu darajada yuqori bo'lgan chegarasiki, hatto yorug'lik zarrachalari ham undan qochib qutula olmaydi."
         }
 
 # --- Round Engine ---
