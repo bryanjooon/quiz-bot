@@ -41,6 +41,7 @@ CYRILLIC_TO_LATIN = {
     'С': 'C', 'с': 'C',
     'D': 'D', 'd': 'D', 'Д': 'D', 'д': 'D'
 }
+
 # --- Vulgarity, Harassment & Profanity Filter ---
 VULGAR_PATTERNS = [
     # English vulgarities, harassment, and violence
@@ -58,7 +59,6 @@ VULGAR_PATTERNS = [
     r"whore\w*",
     # Russian / Slavic profanities and insults (Latin + Cyrillic)
     r"na[hx]u[iyj]\w*",
-    r"nah\b",
     r"nax\b",
     r"нах\b",
     r"наху[йяеё]\w*",
@@ -127,7 +127,7 @@ LEET_MAP = str.maketrans({
     '!': 'i',
     '$': 's',
     '3': 'e',
-    'x': 'h',  # normalize variations like nahuy / naxuy
+    'x': 'h',
 })
 
 def is_vulgar(text: str) -> bool:
@@ -150,6 +150,7 @@ def is_vulgar(text: str) -> bool:
         return True
 
     return False
+
 # Strict single-letter match: rejects "a b c d", "abcd", or random chatter
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
@@ -178,6 +179,7 @@ TOPIC_POOLS = [
     "Adabiyot: Mumtoz adabiyot durdonalari va jahon falsafasi",
     "Mantiq va Deduksiya: Detektiv uslubidagi faktlar va chalkash mantiqiy masalalar"
 ]
+
 ISLAMIC_TOPIC_POOLS = [
     "Islom dini va aqoid: Islom va iymon arkonlari, farz va vojib amallar, fiqh asoslari",
     "Islom tarixi: Payg'ambarimiz Muhammad (s.a.v.) siyratlari — Makka va Madina davri muhim voqealari",
@@ -416,6 +418,7 @@ def fetch_question(q_num, recent_history):
             "correct": "A",
             "explanation": "Payg'ambarimiz (s.a.v.) Madinaga yetib kelganlarida Qasva nomli tuyalari Abu Ayyub al-Ansoriy (r.a.) uyining oldiga cho'kkan."
         }
+
 # --- Round Engine ---
 async def post_hourly_question(app):
     global round_state
@@ -453,7 +456,8 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = update.message.text.strip()
-  1. SILENT PROFANITY CENSOR (Deletes bad messages immediately with 0 tokens)
+
+    # 1. SILENT PROFANITY CENSOR (Deletes bad messages immediately with 0 tokens)
     if is_vulgar(text):
         try:
             await update.message.delete()
@@ -465,7 +469,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
 
-    # 2. QUIZ LOGIC (Rest of handle_message continues unchanged)
+    # 2. QUIZ LOGIC
     if not round_state["active"]:
         return
 
@@ -616,35 +620,56 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     await update.message.reply_text("🔄 Barcha ishtirokchilarning ochkolari (ballari) muvaffaqiyatli nollashtirildi!")
-# 1. Global strong reference so Python GC never kills the scheduler
+
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if update.effective_chat.id != GROUP_CHAT_ID:
+        return
+    if not await is_admin(update, context):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        return
+
+    now = datetime.now(TASHKENT_TZ)
+    seconds_to_wait = (60 - now.minute - 1) * 60 + (60 - now.second)
+    mins = seconds_to_wait // 60
+    secs = seconds_to_wait % 60
+    
+    is_alive = scheduler_task is not None and not scheduler_task.done()
+    task_status = "🟢 Ishlayapti (Faol)" if is_alive else "🔴 To'xtab qolgan (Xato)"
+
+    msg = (
+        f"🤖 BOT TIZIM HOLATI:\n\n"
+        f"🕒 Toshkent vaqti: {now.strftime('%H:%M:%S')}\n"
+        f"⚙️ Jadval vazifasi (Scheduler): {task_status}\n"
+        f"⏳ Keyingi soatlik savolgacha: {mins} daqiqa {secs} soniya\n"
+        f"🎯 Faol savol bormi: {'Ha' if round_state['active'] else 'Yo‘q'}\n"
+    )
+    await update.message.reply_text(msg)
+
+# Strong global reference so Python GC never kills the scheduler
 scheduler_task = None
 
 async def scheduler(app):
     while True:
         try:
             now = datetime.now(TASHKENT_TZ)
-            # Calculate exact seconds until the next full hour (:00:00)
             seconds_to_wait = (60 - now.minute - 1) * 60 + (60 - now.second)
             logger.info(f"Tashkent time: {now.strftime('%H:%M:%S')}. Next drop in {seconds_to_wait}s.")
             
             await asyncio.sleep(seconds_to_wait)
-            
-            # Post the question
             await post_hourly_question(app)
-            
-            # 5-second buffer to prevent re-firing in the same minute
             await asyncio.sleep(5)
             
         except Exception as e:
-            # If Groq drops, Telegram times out, or any network error occurs,
-            # log it and keep the loop alive for the next hour!
             logger.error(f"Scheduler error caught (loop protected): {e}", exc_info=True)
             await asyncio.sleep(10)
 
 async def on_startup(app):
     global scheduler_task
-    # Retain global reference
     scheduler_task = asyncio.create_task(scheduler(app))
+
 if __name__ == "__main__":
     threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(on_startup).build()
@@ -653,6 +678,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("skip", cmd_skip))
     app.add_handler(CommandHandler("reset", cmd_reset))
+    app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
     app.run_polling()
