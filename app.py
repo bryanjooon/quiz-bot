@@ -356,26 +356,29 @@ def fetch_question(q_num, recent_history):
     history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "Hozircha yo'q"
 
     prompt = f"""
-    Sen Telegram viktorinasi uchun ORIGINAL va TAKRORLANMAS savol tuzuvchisan.
+    Sen Telegram viktorinasi uchun ORIGINAL, QIZIQARLI va O'RTACHA DARAJADAGI savol tuzuvchisan.
     Hozirgi savol raqami: #{q_num} / 1 000 000.
     Unikal kalit: {cache_buster}.
     
     MAVZU: {chosen_topic}
     USLUB: {chosen_angle}
     
-    QAT'IY TAQIQLAR VA QOIDALAR:
-    1. LINGVISTIK VA SO'Z KELIB CHIQISHI SAVOLLARI QAT'IYAN TAQIQLANADI:
-       - 'Qaysi tildan olingan?', 'So'zning ma'nosi nima?', 'Atama qayerdan kelib chiqqan?' (masalan: radiatsiya, atom, biologiya so'zi kelib chiqishi) kabi zerikarli etimologik savollarni ASLO berma!
-    2. SO'NGGI SAVOLLAR VA JAVOBLAR TAKRORLANMASIN:
+    QAT'IY QOIDALAR VA FORMAT:
+    1. SAVOL DARAJASI:
+       - Savollar haddan tashqari qiyin, ilmiy atamalar bilan chalkashtiruvchi bo'lmasin.
+       - Oddiy, kengroq qatlam tushunadigan, lekin qiziqarli (Oson yoki O'rta darajada) bo'lsin.
+       - Darajani aniq belgilang: "Oson", "O'rta" yoki "Murakkab", va 1/10 dan 10/10 gacha shkala bering (masalan: 3/10, 5/10, 6/10).
+    2. LINGVISTIK VA SO'Z KELIB CHIQISHI TAQIQLANADI:
+       - 'Qaysi tildan olingan?', 'Atama ma'nosi nima?' kabi etimologik savollarni ASLO berma.
+    3. SO'NGGI SAVOLLAR TAKRORLANMASIN:
     {history_block}
-    3. Eng sodda, qolipli maktab savollarini (Merkuriy, Everest, Temur qachon tug'ilgan, Umarxon, Brom, Simob) aslo berma!
-    4. Savol jonli, qiziqarli, voqea-hodisalarga yoki aniq mexanizmlarga asoslangan faktik savol bo'lsin.
-    5. Agar mavzu Islom dini yoki tarixiga oid bo'lsa, savol faqat ishonchli (sahih) manbalar asosida, hurmat bilan va nozik ixtilofli masalalarga kirmasdan tuzilsin.
-    6. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
+    4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
     
-    Faqat quyidagi JSON formatida to'g'ridan-to'g'ri javob ber (hech qanday markdown kod blokisiz):
+    Faqat quyidagi JSON formatida javob ber (hech qanday markdown kod blokisiz):
     {{
         "subject": "{chosen_topic.split(':')[0].strip()}",
+        "difficulty_label": "O'rta",
+        "difficulty_score": "5/10",
         "question": "Savol matni o'zbek tilida",
         "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
         "correct": "A",
@@ -396,7 +399,7 @@ def fetch_question(q_num, recent_history):
             {"role": "user", "content": prompt}
         ],
         "response_format": {"type": "json_object"},
-        "temperature": 0.85
+        "temperature": 0.8
     }
     
     try:
@@ -413,11 +416,13 @@ def fetch_question(q_num, recent_history):
     except Exception as e:
         logger.error(f"Groq request failed: {e}", exc_info=True)
         return {
-            "subject": "Fizika",
-            "question": "Qora tuynukning nurni ham o'ziga tortib, tashqariga chiqarmaydigan nazariy chegarasi qanday ataladi?",
-            "options": {"A": "Hodisalar gorizonti", "B": "Ergosfera", "C": "Singulyarlik nuqtasi", "D": "Akkretsiya diski"},
+            "subject": "Astronomiya",
+            "difficulty_label": "Oson",
+            "difficulty_score": "3/10",
+            "question": "Quyosh sistemasidagi eng katta sayyora qaysi?",
+            "options": {"A": "Yupiter", "B": "Saturn", "C": "Neptun", "D": "Uran"},
             "correct": "A",
-            "explanation": "Hodisalar gorizonti — bu qora tuynukning tortishish kuchi shu darajada yuqori bo'lgan chegarasiki, hatto yorug'lik zarrachalari ham undan qochib qutula olmaydi."
+            "explanation": "Yupiter Quyosh tizimidagi eng ulkan gigant gaz sayyorasidir."
         }
 
 # --- Round Engine ---
@@ -633,12 +638,12 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     now = datetime.now(TASHKENT_TZ)
-    # Align to nearest 10-minute block (:00, :10, :20, :30, :40, :50)
-    minutes_past = now.minute % 10
+    # Align to nearest 5-minute block (:00, :05, :10, :15, :20, etc.)
+    minutes_past = now.minute % 5
     seconds_past = minutes_past * 60 + now.second
-    seconds_to_wait = 600 - seconds_past
+    seconds_to_wait = 300 - seconds_past
     if seconds_to_wait <= 0:
-        seconds_to_wait = 600
+        seconds_to_wait = 300
 
     mins = seconds_to_wait // 60
     secs = seconds_to_wait % 60
@@ -655,33 +660,31 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg)
 
-# Hold strong reference so Python GC never kills the scheduler
 scheduler_task = None
 
 async def scheduler(app):
     while True:
         try:
             now = datetime.now(TASHKENT_TZ)
-            # Calculate exact seconds until the next 10-minute mark (:00, :10, :20, etc.)
-            minutes_past = now.minute % 10
+            # Calculate exact seconds until the next 5-minute interval
+            minutes_past = now.minute % 5
             seconds_past = minutes_past * 60 + now.second
-            seconds_to_wait = 600 - seconds_past
+            seconds_to_wait = 300 - seconds_past
             if seconds_to_wait <= 0:
-                seconds_to_wait = 600
+                seconds_to_wait = 300
                 
-            logger.info(f"Tashkent time: {now.strftime('%H:%M:%S')}. Next 10-min drop in {seconds_to_wait}s.")
+            logger.info(f"Tashkent time: {now.strftime('%H:%M:%S')}. Next 5-min drop in {seconds_to_wait}s.")
             await asyncio.sleep(seconds_to_wait)
             
             # Post question
             await post_hourly_question(app)
             
-            # Buffer to cross the exact second mark and prevent re-firing
+            # Small buffer to prevent re-firing in the same minute
             await asyncio.sleep(5)
             
         except Exception as e:
             logger.error(f"Scheduler error caught (loop protected): {e}", exc_info=True)
             await asyncio.sleep(10)
-
 async def on_startup(app):
     global scheduler_task
     scheduler_task = asyncio.create_task(scheduler(app))
