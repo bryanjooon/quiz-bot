@@ -632,7 +632,13 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     now = datetime.now(TASHKENT_TZ)
-    seconds_to_wait = (60 - now.minute - 1) * 60 + (60 - now.second)
+    # Align to nearest 10-minute block (:00, :10, :20, :30, :40, :50)
+    minutes_past = now.minute % 10
+    seconds_past = minutes_past * 60 + now.second
+    seconds_to_wait = 600 - seconds_past
+    if seconds_to_wait <= 0:
+        seconds_to_wait = 600
+
     mins = seconds_to_wait // 60
     secs = seconds_to_wait % 60
     
@@ -643,23 +649,32 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🤖 BOT TIZIM HOLATI:\n\n"
         f"🕒 Toshkent vaqti: {now.strftime('%H:%M:%S')}\n"
         f"⚙️ Jadval vazifasi (Scheduler): {task_status}\n"
-        f"⏳ Keyingi soatlik savolgacha: {mins} daqiqa {secs} soniya\n"
+        f"⏳ Keyingi savolgacha: {mins} daqiqa {secs} soniya\n"
         f"🎯 Faol savol bormi: {'Ha' if round_state['active'] else 'Yo‘q'}\n"
     )
     await update.message.reply_text(msg)
 
-# Strong global reference so Python GC never kills the scheduler
+# Hold strong reference so Python GC never kills the scheduler
 scheduler_task = None
 
 async def scheduler(app):
     while True:
         try:
             now = datetime.now(TASHKENT_TZ)
-            seconds_to_wait = (60 - now.minute - 1) * 60 + (60 - now.second)
-            logger.info(f"Tashkent time: {now.strftime('%H:%M:%S')}. Next drop in {seconds_to_wait}s.")
-            
+            # Calculate exact seconds until the next 10-minute mark (:00, :10, :20, etc.)
+            minutes_past = now.minute % 10
+            seconds_past = minutes_past * 60 + now.second
+            seconds_to_wait = 600 - seconds_past
+            if seconds_to_wait <= 0:
+                seconds_to_wait = 600
+                
+            logger.info(f"Tashkent time: {now.strftime('%H:%M:%S')}. Next 10-min drop in {seconds_to_wait}s.")
             await asyncio.sleep(seconds_to_wait)
+            
+            # Post question
             await post_hourly_question(app)
+            
+            # Buffer to cross the exact second mark and prevent re-firing
             await asyncio.sleep(5)
             
         except Exception as e:
