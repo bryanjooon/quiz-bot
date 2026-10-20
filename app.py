@@ -498,19 +498,35 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     
     await update.message.reply_text("🔄 Barcha ishtirokchilarning ochkolari (ballari) muvaffaqiyatli nollashtirildi!")
+# 1. Global strong reference so Python GC never kills the scheduler
+scheduler_task = None
 
 async def scheduler(app):
     while True:
-        now = datetime.now(TASHKENT_TZ)
-        seconds_to_wait = (60 - now.minute - 1) * 60 + (60 - now.second)
-        logger.info(f"Next hourly question in {seconds_to_wait}s.")
-        await asyncio.sleep(seconds_to_wait)
-        await post_hourly_question(app)
-        await asyncio.sleep(5)
+        try:
+            now = datetime.now(TASHKENT_TZ)
+            # Calculate exact seconds until the next full hour (:00:00)
+            seconds_to_wait = (60 - now.minute - 1) * 60 + (60 - now.second)
+            logger.info(f"Tashkent time: {now.strftime('%H:%M:%S')}. Next drop in {seconds_to_wait}s.")
+            
+            await asyncio.sleep(seconds_to_wait)
+            
+            # Post the question
+            await post_hourly_question(app)
+            
+            # 5-second buffer to prevent re-firing in the same minute
+            await asyncio.sleep(5)
+            
+        except Exception as e:
+            # If Groq drops, Telegram times out, or any network error occurs,
+            # log it and keep the loop alive for the next hour!
+            logger.error(f"Scheduler error caught (loop protected): {e}", exc_info=True)
+            await asyncio.sleep(10)
 
 async def on_startup(app):
-    asyncio.create_task(scheduler(app))
-
+    global scheduler_task
+    # Retain global reference
+    scheduler_task = asyncio.create_task(scheduler(app))
 if __name__ == "__main__":
     threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(on_startup).build()
