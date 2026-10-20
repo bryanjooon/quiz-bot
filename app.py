@@ -149,13 +149,12 @@ def is_vulgar(text: str) -> bool:
     normalized_text = text.translate(LEET_MAP)
     if VULGAR_REGEX.search(normalized_text):
         return True
-    # Strip spaces, punctuation, and underscores to catch evasion attempts like e_b_a_n or y b a n
     condensed = re.sub(r"[\W_]", "", normalized_text.lower())
     if VULGAR_REGEX.search(condensed):
         return True
     return False
 
-# Strict single-letter match: rejects "a b c d", "abcd", or random sentences
+# Strict single-letter match
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
 TOPIC_POOLS = [
@@ -211,7 +210,10 @@ round_state = {
     "question_text": "",
     "attempted_users": set(),
     "in_initial_window": False,
-    "first_10s_answers": []
+    "first_10s_answers": [],
+    "message_id": None,
+    "base_text": "",
+    "answered_names": []
 }
 
 # --- Keep-Alive Web Server for Render ---
@@ -369,7 +371,6 @@ def get_grade_info(q_num: int):
 def fetch_question(q_num, recent_history):
     grade_label, grade_score = get_grade_info(q_num)
 
-    # Cadence: 1 in every 4 questions is Islamic history / religion
     if q_num % 4 == 0:
         chosen_topic = random.choice(ISLAMIC_TOPIC_POOLS)
     else:
@@ -386,9 +387,9 @@ def fetch_question(q_num, recent_history):
     
     QAT'IY BOSQICH VA DARAJA TALABI:
     - Hozirgi daraja: **{grade_label}** darajasi ({grade_score}).
-    - Savol murakkabligi, tili, variantlari va mantiqi aynan **{grade_label}** o'quvchisi yoki o'sha yoshdagi inson qiynalmasdan tushunadigan soddalikda bo'lsin.
+    - Savol murakkabligi, tili, variantlari va mantiqi aynan **{grade_label}** o'quvchisi qiynalmasdan tushunadigan soddalikda bo'lsin.
     - O'ta qiyin ilmiy terminlar, chalkash tafsilotlar yoki akademik ensiklopediya savollarini BERMA!
-    - Agar mavzu maktab dasturida bo'lmasa ham (masalan, Kosmonavtika, Kriptografiya yoki Islom tarixi), uni aynan {grade_label} o'quvchisining dunyoqarashi va aqliga moslab, sodda va qiziqarli qilib tuz.
+    - Agar mavzu maktab dasturida bo'lmasa ham (masalan, Kosmonavtika, Kriptografiya yoki Islom tarixi), uni aynan {grade_label} o'quvchisining dunyoqarashiga moslab, sodda va qiziqarli qilib tuz.
 
     MAVZU: {chosen_topic}
     USLUB: {chosen_angle}
@@ -478,7 +479,6 @@ async def evaluate_initial_window(app, target_q_num: int):
         medals = ["🥇", "🥈", "🥉"]
         winners_lines = []
 
-        # Deduplicate users if any duplicate slipped through
         unique_correct = []
         seen_ids = set()
         for ans in correct_answers:
@@ -542,6 +542,7 @@ async def post_hourly_question(app):
     round_state["question_text"] = data["question"]
     round_state["attempted_users"].clear()
     round_state["first_10s_answers"].clear()
+    round_state["answered_names"].clear()
     round_state["in_initial_window"] = True
     
     grade_label = data.get("grade", "5-sinf")
@@ -556,12 +557,14 @@ async def post_hourly_question(app):
         f"C) {data['options']['C']}\n"
         f"D) {data['options']['D']}\n\n"
         f"⚡ Variantni yozing (A, B, C yoki D)!\n"
-        f"⏳ Dastlabki 10 soniya ichida eng tez topgan 3 kishi ball oladi (🥇10, 🥈5, 🥉3)!"
+        f"⏳ Dastlabki 10 soniya ichida eng tez topgan 3 kishi ball oladi (🥇10, 🥈5, 🥉3)!\n"
+        f"🤫 Javobingiz bot tomonidan o‘chirilib, quyidagi ro‘yxatga kiritiladi."
     )
-    await app.bot.send_message(GROUP_CHAT_ID, msg_text)
+    round_state["base_text"] = msg_text
+    sent_msg = await app.bot.send_message(GROUP_CHAT_ID, msg_text)
+    round_state["message_id"] = sent_msg.message_id
     logger.info(f"Question #{q_num} ({grade_label}) posted. Correct: {round_state['correct']}")
 
-    # Start the 10-second intake window
     asyncio.create_task(evaluate_initial_window(app, q_num))
 
 # --- Message Handler ---
@@ -593,16 +596,38 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.message.from_user
 
-    # Repeat attempts: silently delete and say nothing
+    # Delete the user's answer immediately to eliminate chat spam & prevent copying
+    try:
+        await update.message.delete()
+    except Exception as e:
+        logger.warning(f"Could not delete answer message: {e}")
+
+    # Silently ignore repeat attempts
     if user.id in round_state["attempted_users"]:
-        try:
-            await update.message.delete()
-        except Exception as e:
-            logger.warning(f"Could not delete repeat attempt: {e}")
         return
 
-    # First attempt: register attempt
+    # Register player's single attempt
     round_state["attempted_users"].add(user.id)
+    user_name = user.first_name or "O‘yinchi"
+    round_state["answered_names"].append(user_name)
+
+    # Live-edit the question message to show the updated list of respondents
+    if round_state["message_id"]:
+        answered_lines = "\n".join([f"• {name}" for name in round_state["answered_names"]])
+        updated_text = (
+            f"{round_state['base_text']}\n\n"
+            f"👥 Javob berganlar ({len(round_state['answered_names'])}):\n"
+            f"{answered_lines}"
+        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=GROUP_CHAT_ID,
+                message_id=round_state["message_id"],
+                text=updated_text
+            )
+        except Exception as e:
+            logger.warning(f"Could not update question message: {e}")
+
     raw_choice = match.group(1)
     choice = CYRILLIC_TO_LATIN.get(raw_choice, raw_choice).upper()
 
@@ -615,11 +640,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
         return
 
-    # PHASE 2: After the 10-second window has closed (Sudden-Death)
+    # PHASE 2: After the 10-second mark (Sudden-Death)
     try:
         if choice == round_state["correct"]:
             round_state["active"] = False
-            winner_name = user.first_name or "O‘yinchi"
+            winner_name = user_name
             
             pin = await get_or_create_leaderboard(context.bot)
             q_num, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
@@ -644,11 +669,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"{leaderboard_str}\n\n"
                 f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
             )
-            await update.message.reply_text(reply)
-        else:
-            await update.message.reply_text(f"❌ Noto‘g‘ri, {user.first_name}! Keyingi savolga qadar o‘yindan chiqdingiz.")
+            await context.bot.send_message(GROUP_CHAT_ID, reply)
     except Exception as e:
-        logger.error(f"Error handling answer reply: {e}", exc_info=True)
+        logger.error(f"Error handling sudden death answer: {e}", exc_info=True)
 
 # --- Commands ---
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
