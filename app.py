@@ -528,7 +528,40 @@ async def evaluate_initial_window(app, target_q_num: int):
 # --- Round Engine ---
 async def post_hourly_question(app):
     global round_state
+
+    # 1. AUTO-EXPIRE: If previous question was never answered, reveal it and advance q_num
+    if round_state["active"]:
+        round_state["active"] = False
+        prev_q_num = round_state["q_num"]
+        prev_correct = round_state["correct"]
+        prev_ans = round_state["options"].get(prev_correct, "")
+        prev_expl = round_state["explanation"]
+        prev_q_text = round_state["question_text"]
+
+        try:
+            pin = await get_or_create_leaderboard(app.bot)
+            curr_q, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
+
+            await update_pin(
+                app.bot,
+                next_q_num=curr_q + 1,
+                scores_dict=scores,
+                new_question_summary=prev_q_text
+            )
+
+            timeout_msg = (
+                f"⏰ VAQT TUGADI! (#{prev_q_num:07d})\n\n"
+                f"Hech kim to‘g‘ri javob bera olmadi.\n"
+                f"✅ To‘g‘ri javob: {prev_correct}) {prev_ans}\n"
+                f"💡 Izoh: {prev_expl}\n\n"
+                f"⚡ Keyingi savol chiqmoqda..."
+            )
+            await app.bot.send_message(GROUP_CHAT_ID, timeout_msg)
+            await asyncio.sleep(2)
+        except Exception as e:
+            logger.error(f"Error expiring unanswered question: {e}", exc_info=True)
     
+    # 2. Fetch data for the new round
     pin = await get_or_create_leaderboard(app.bot)
     q_num, _, history = parse_pin_data(getattr(pin, "text", "") or "")
     
