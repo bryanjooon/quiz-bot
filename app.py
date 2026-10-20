@@ -59,6 +59,7 @@ VULGAR_PATTERNS = [
     r"whore\w*",
     # Russian / Slavic profanities and insults (Latin + Cyrillic)
     r"na[hx]u[iyj]\w*",
+    r"nah\b",
     r"nax\b",
     r"нах\b",
     r"наху[йяеё]\w*",
@@ -90,6 +91,16 @@ VULGAR_PATTERNS = [
     r"debil\w*",
     r"далба[её]б\w*",
     r"dalba[ye]ob\w*",
+    # yban / yeban / eban variants (Latin + Cyrillic + elongations)
+    r"y+e*b+a+[nŋ]\w*",
+    r"e+b+a+[nŋ]\w*",
+    r"y+e*b+l+a+[nŋ]\w*",
+    r"e+b+l+a+[nŋ]\w*",
+    r"[её]+б+а+[нң]\w*",
+    r"[её]+б+л+а+[нң]\w*",
+    r"й+е+б+а+[нң]\w*",
+    r"и+б+а+[нң]\w*",
+    r"ы+б+а+[нң]\w*",
     # Uzbek profanities, slurs, and insults
     r"jalap\w*",
     r"jala\b",
@@ -118,7 +129,6 @@ VULGAR_REGEX = re.compile(
     re.UNICODE
 )
 
-# Secondary character-substitution map to prevent common leetspeak bypasses
 LEET_MAP = str.maketrans({
     '@': 'a',
     '4': 'a',
@@ -131,27 +141,21 @@ LEET_MAP = str.maketrans({
 })
 
 def is_vulgar(text: str) -> bool:
-    """Checks if a message contains blocked profanities, spaced bypasses, or leetspeak."""
+    """Checks if a message contains profanities, spaced bypasses, or leetspeak."""
     if not text:
         return False
-
-    # 1. Standard word boundary check
     if VULGAR_REGEX.search(text):
         return True
-
-    # 2. Check normalized leetspeak substitutions
     normalized_text = text.translate(LEET_MAP)
     if VULGAR_REGEX.search(normalized_text):
         return True
-
-    # 3. Detect spaced-out evasions (e.g., 'n a x u y', 'l o x', 'r a p e')
-    condensed = re.sub(r"[^\w]", "", normalized_text.lower())
+    # Strip spaces, punctuation, and underscores to catch evasion attempts like e_b_a_n or y b a n
+    condensed = re.sub(r"[\W_]", "", normalized_text.lower())
     if VULGAR_REGEX.search(condensed):
         return True
-
     return False
 
-# Strict single-letter match: rejects "a b c d", "abcd", or random chatter
+# Strict single-letter match: rejects "a b c d", "abcd", or random sentences
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
 TOPIC_POOLS = [
@@ -205,7 +209,9 @@ round_state = {
     "options": {},
     "explanation": "",
     "question_text": "",
-    "attempted_users": set()
+    "attempted_users": set(),
+    "in_initial_window": False,
+    "first_10s_answers": []
 }
 
 # --- Keep-Alive Web Server for Render ---
@@ -303,7 +309,7 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         if new_question_summary:
             clean_summary = new_question_summary.replace("\n", " ").strip()[:90]
             history.insert(0, clean_summary)
-            history = history[:15]  # Keep last 15 questions in memory
+            history = history[:15]
             
         scores_body = format_top10_scores(scores_dict)
         history_lines = [f"• {item}" for item in history] if history else ["• Savollar tarixi boshlanmoqda..."]
@@ -344,6 +350,7 @@ def get_working_groq_model():
         logger.error(f"Failed to inspect Groq model list: {e}")
     return "openai/gpt-oss-20b"
 
+# --- Grade Progression Helper ---
 def get_grade_info(q_num: int):
     """Calculates school grade level based on 1,000 questions per tier."""
     grade_num = 5 + ((q_num - 1) // 1000)
@@ -357,8 +364,8 @@ def get_grade_info(q_num: int):
         label = "Akademik / Ekspert"
         score = "10/10"
     return label, score
-    
 
+# --- Question Generator ---
 def fetch_question(q_num, recent_history):
     grade_label, grade_score = get_grade_info(q_num)
 
@@ -381,16 +388,18 @@ def fetch_question(q_num, recent_history):
     - Hozirgi daraja: **{grade_label}** darajasi ({grade_score}).
     - Savol murakkabligi, tili, variantlari va mantiqi aynan **{grade_label}** o'quvchisi yoki o'sha yoshdagi inson qiynalmasdan tushunadigan soddalikda bo'lsin.
     - O'ta qiyin ilmiy terminlar, chalkash tafsilotlar yoki akademik ensiklopediya savollarini BERMA!
-    - Agar mavzu maktab dasturida bo'lmasa ham (masalan, Kosmonavtika, Kriptografiya yoki Islom tarixi), uni aynan {grade_label} o'quvchisining dunyoqarashi va aqliga moslab, juda sodda va qiziqarli qilib tuz.
+    - Agar mavzu maktab dasturida bo'lmasa ham (masalan, Kosmonavtika, Kriptografiya yoki Islom tarixi), uni aynan {grade_label} o'quvchisining dunyoqarashi va aqliga moslab, sodda va qiziqarli qilib tuz.
 
     MAVZU: {chosen_topic}
     USLUB: {chosen_angle}
     
     QO'SHIMCHA TAQIQLAR:
-    1. LINGVISTIK VA SO'Z KELIB CHIQISHI TAQIQLANADI ('qaysi tildan olingan', 'ma'nosi nima' kabi savollar aslo bo'lmasin).
+    1. LINGVISTIK VA SO'Z KELIB CHIQISHI TAQIQLANADI:
+       - 'Qaysi tildan olingan?', 'So'zning ma'nosi nima?' kabi etimologik savollarni ASLO berma.
     2. SO'NGGI SAVOLLAR TAKRORLANMASIN:
     {history_block}
-    3. Variantlar aniq, tushunarli bo'lsin. Faqat 1 ta to'g'ri javob.
+    3. Agar mavzu Islom dini yoki tarixiga oid bo'lsa, savol faqat ishonchli (sahih) manbalar asosida, hurmat bilan va nozik ixtilofli masalalarga kirmasdan tuzilsin.
+    4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
     
     Faqat quyidagi JSON formatida javob ber (hech qanday markdown kod blokisiz):
     {{
@@ -417,7 +426,7 @@ def fetch_question(q_num, recent_history):
             {"role": "user", "content": prompt}
         ],
         "response_format": {"type": "json_object"},
-        "temperature": 0.7
+        "temperature": 0.75
     }
     
     try:
@@ -440,8 +449,81 @@ def fetch_question(q_num, recent_history):
             "question": "Amir Temur davlatining poytaxti qaysi shahar bo'lgan?",
             "options": {"A": "Samarqand", "B": "Buxoro", "C": "Toshkent", "D": "Xiva"},
             "correct": "A",
-            "explanation": "Amir Temur Samarqand shahrini o'z saltanatining poytaxti etib belgilagan va uni dunyoning eng go'zal shahriga aylantirgan."
+            "explanation": "Amir Temur Samarqand shahrini o'z saltanatining poytaxti etib belgilagan va uni obod qilgan."
         }
+
+# --- 10-Second Intake Evaluator (Tiered Scoring) ---
+async def evaluate_initial_window(app, target_q_num: int):
+    """Waits 10 seconds, then awards points (10, 5, 3) to the fastest correct guesses."""
+    await asyncio.sleep(10)
+    global round_state
+
+    if not round_state["active"] or round_state["q_num"] != target_q_num:
+        return
+
+    round_state["in_initial_window"] = False
+    answers = round_state["first_10s_answers"]
+    correct_choice = round_state["correct"]
+
+    correct_answers = [ans for ans in answers if ans["choice"] == correct_choice]
+
+    if correct_answers:
+        round_state["active"] = False
+        correct_answers.sort(key=lambda x: x["timestamp"])
+
+        pin = await get_or_create_leaderboard(app.bot)
+        q_num, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
+
+        points_map = [10, 5, 3]
+        medals = ["🥇", "🥈", "🥉"]
+        winners_lines = []
+
+        # Deduplicate users if any duplicate slipped through
+        unique_correct = []
+        seen_ids = set()
+        for ans in correct_answers:
+            if ans["user"].id not in seen_ids:
+                seen_ids.add(ans["user"].id)
+                unique_correct.append(ans)
+
+        for idx, ans in enumerate(unique_correct[:3]):
+            user = ans["user"]
+            name = user.first_name or "O‘yinchi"
+            pts = points_map[idx]
+            scores[name] = scores.get(name, 0) + pts
+            winners_lines.append(f"{medals[idx]} {name} — +{pts} ball ({idx + 1}-o‘rin)")
+
+        leaderboard_str = await update_pin(
+            app.bot,
+            next_q_num=q_num + 1,
+            scores_dict=scores,
+            new_question_summary=round_state["question_text"]
+        )
+
+        ans_text = round_state["options"].get(correct_choice, "")
+        winners_block = "\n".join(winners_lines)
+
+        extra_correct = len(unique_correct) - 3
+        extra_note = f"\n👏 Yana {extra_correct} kishi to‘g‘ri topdi, ammo shohsupaga ulgurmadi!" if extra_correct > 0 else ""
+
+        reply = (
+            f"⏰ 10 SONIYA TUGADI!\n\n"
+            f"🎯 TO‘G‘RI JAVOB: {correct_choice}) {ans_text}\n"
+            f"💡 Izoh: {round_state['explanation']}\n\n"
+            f"⚡ G‘OLIBLAR VA BALLAR:\n"
+            f"{winners_block}{extra_note}\n\n"
+            f"📊 TOP-10 REYTINQ:\n"
+            f"{leaderboard_str}\n\n"
+            f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
+        )
+        await app.bot.send_message(GROUP_CHAT_ID, reply)
+    else:
+        if answers:
+            await app.bot.send_message(
+                GROUP_CHAT_ID,
+                "⏳ 10 soniya o‘tdi, ammo to‘g‘ri javob berilmadi!\n"
+                "🔥 O‘yin davom etadi — endi kim birinchi to‘g‘ri topsa, to‘liq 10 ball oladi!"
+            )
 
 # --- Round Engine ---
 async def post_hourly_question(app):
@@ -459,6 +541,8 @@ async def post_hourly_question(app):
     round_state["explanation"] = data["explanation"]
     round_state["question_text"] = data["question"]
     round_state["attempted_users"].clear()
+    round_state["first_10s_answers"].clear()
+    round_state["in_initial_window"] = True
     
     grade_label = data.get("grade", "5-sinf")
     diff_score = data.get("difficulty_score", "1/10")
@@ -471,11 +555,16 @@ async def post_hourly_question(app):
         f"B) {data['options']['B']}\n"
         f"C) {data['options']['C']}\n"
         f"D) {data['options']['D']}\n\n"
-        f"⚡ To‘g‘ri variant harfini yozing (A, B, C yoki D)! Har bir kishiga 1 ta urinish."
+        f"⚡ Variantni yozing (A, B, C yoki D)!\n"
+        f"⏳ Dastlabki 10 soniya ichida eng tez topgan 3 kishi ball oladi (🥇10, 🥈5, 🥉3)!"
     )
     await app.bot.send_message(GROUP_CHAT_ID, msg_text)
     logger.info(f"Question #{q_num} ({grade_label}) posted. Correct: {round_state['correct']}")
 
+    # Start the 10-second intake window
+    asyncio.create_task(evaluate_initial_window(app, q_num))
+
+# --- Message Handler ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global round_state
     
@@ -484,7 +573,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text.strip()
 
-    # 1. SILENT PROFANITY CENSOR (Deletes bad messages immediately with 0 tokens)
+    # 1. SILENT PROFANITY CENSOR (Zero Tokens, Instant Deletion)
     if is_vulgar(text):
         try:
             await update.message.delete()
@@ -492,11 +581,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Could not delete vulgar message: {e}")
         return
 
-    # Don't process non-group messages
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
 
-    # 2. QUIZ LOGIC
     if not round_state["active"]:
         return
 
@@ -511,14 +598,24 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         try:
             await update.message.delete()
         except Exception as e:
-            logger.warning(f"Could not delete spam attempt: {e}")
+            logger.warning(f"Could not delete repeat attempt: {e}")
         return
 
-    # First attempt: register user attempt
+    # First attempt: register attempt
     round_state["attempted_users"].add(user.id)
     raw_choice = match.group(1)
     choice = CYRILLIC_TO_LATIN.get(raw_choice, raw_choice).upper()
 
+    # PHASE 1: Collect guesses silently during the first 10 seconds
+    if round_state["in_initial_window"]:
+        round_state["first_10s_answers"].append({
+            "user": user,
+            "choice": choice,
+            "timestamp": time.time()
+        })
+        return
+
+    # PHASE 2: After the 10-second window has closed (Sudden-Death)
     try:
         if choice == round_state["correct"]:
             round_state["active"] = False
@@ -545,12 +642,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"💡 Izoh: {round_state['explanation']}\n\n"
                 f"📊 TOP-10 REYTINQ:\n"
                 f"{leaderboard_str}\n\n"
-                f"⏳ Keyingi savol keyingi soat boshida chiqadi."
+                f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
             )
             await update.message.reply_text(reply)
         else:
-            # Announce first incorrect attempt so the player knows they are locked out
-            await update.message.reply_text(f"❌ Noto‘g‘ri, {user.first_name}! Bu soat uchun o‘yindan chiqdingiz.")
+            await update.message.reply_text(f"❌ Noto‘g‘ri, {user.first_name}! Keyingi savolga qadar o‘yindan chiqdingiz.")
     except Exception as e:
         logger.error(f"Error handling answer reply: {e}", exc_info=True)
 
@@ -558,7 +654,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
-    # Non-admin usage: silently delete command
     if not await is_admin(update, context):
         try:
             await update.message.delete()
@@ -588,7 +683,6 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
     
-    # Non-admin usage: silently delete command
     if not await is_admin(update, context):
         try:
             await update.message.delete()
@@ -620,7 +714,7 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⏭ SAVOL O'TKAZIB YUBORILDI (Admin tomonidan)\n\n"
         f"✅ To‘g‘ri javob: {correct_letter}) {ans_text}\n"
         f"💡 Izoh: {explanation}\n\n"
-        f"⏳ Keyingi savol yangi soat boshida yoki /test orqali chiqadi."
+        f"⏳ Keyingi savol 5 daqiqadan so‘ng yoki /test orqali chiqadi."
     )
     await update.message.reply_text(reply)
 
@@ -628,7 +722,6 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
     
-    # Non-admin usage: silently delete command
     if not await is_admin(update, context):
         try:
             await update.message.delete()
@@ -659,7 +752,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     now = datetime.now(TASHKENT_TZ)
-    # Align to nearest 5-minute block (:00, :05, :10, :15, :20, etc.)
     minutes_past = now.minute % 5
     seconds_past = minutes_past * 60 + now.second
     seconds_to_wait = 300 - seconds_past
@@ -681,35 +773,34 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg)
 
+# --- Scheduler Task (5-Minute Drops) ---
 scheduler_task = None
 
 async def scheduler(app):
     while True:
         try:
             now = datetime.now(TASHKENT_TZ)
-            # Calculate exact seconds until the next 5-minute interval
             minutes_past = now.minute % 5
             seconds_past = minutes_past * 60 + now.second
             seconds_to_wait = 300 - seconds_past
             if seconds_to_wait <= 0:
                 seconds_to_wait = 300
                 
-            logger.info(f"Tashkent time: {now.strftime('%H:%M:%S')}. Next 5-min drop in {seconds_to_wait}s.")
+            logger.info(f"Tashkent time: {now.strftime('%H:%M:%S')}. Next drop in {seconds_to_wait}s.")
             await asyncio.sleep(seconds_to_wait)
             
-            # Post question
             await post_hourly_question(app)
-            
-            # Small buffer to prevent re-firing in the same minute
             await asyncio.sleep(5)
             
         except Exception as e:
             logger.error(f"Scheduler error caught (loop protected): {e}", exc_info=True)
             await asyncio.sleep(10)
+
 async def on_startup(app):
     global scheduler_task
     scheduler_task = asyncio.create_task(scheduler(app))
 
+# --- Main Startup ---
 if __name__ == "__main__":
     threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(on_startup).build()
