@@ -41,7 +41,115 @@ CYRILLIC_TO_LATIN = {
     'С': 'C', 'с': 'C',
     'D': 'D', 'd': 'D', 'Д': 'D', 'д': 'D'
 }
+# --- Vulgarity, Harassment & Profanity Filter ---
+VULGAR_PATTERNS = [
+    # English vulgarities, harassment, and violence
+    r"fuck\w*",
+    r"shit\w*",
+    r"bitch\w*",
+    r"asshole\w*",
+    r"bastard\w*",
+    r"cunt\w*",
+    r"dick\w*",
+    r"pussy\w*",
+    r"rape\w*",
+    r"rapis\w*",
+    r"slut\w*",
+    r"whore\w*",
+    # Russian / Slavic profanities and insults (Latin + Cyrillic)
+    r"na[hx]u[iyj]\w*",
+    r"nah\b",
+    r"nax\b",
+    r"нах\b",
+    r"наху[йяеё]\w*",
+    r"поху[йяеё]\w*",
+    r"ху[йяеёи]\w*",
+    r"xuy\w*",
+    r"пизд\w*",
+    r"pizd\w*",
+    r"бля\w*",
+    r"blya\w*",
+    r"еба\w*",
+    r"ёб\w*",
+    r"yob\w*",
+    r"yeb\w*",
+    r"сука\w*",
+    r"сучк\w*",
+    r"suka\w*",
+    r"suchk\w*",
+    r"мудак\w*",
+    r"mudak\w*",
+    r"гандон\w*",
+    r"gandon\w*",
+    r"презерватив\w*",
+    r"лох\w*",
+    r"lox\w*",
+    r"чмо\w*",
+    r"chmo\w*",
+    r"дебил\w*",
+    r"debil\w*",
+    r"далба[её]б\w*",
+    r"dalba[ye]ob\w*",
+    # Uzbek profanities, slurs, and insults
+    r"jalap\w*",
+    r"jala\b",
+    r"жалап\w*",
+    r"жалаб\w*",
+    r"qanjiq\w*",
+    r"қанжиқ\w*",
+    r"sik\w*",
+    r"сики\w*",
+    r"сик\w*",
+    r"qo[t']oq\w*",
+    r"қотоқ\w*",
+    r"onangni\w*",
+    r"otangni\w*",
+    r"ona[nŋ]g\w*",
+    r"itvachcha\w*",
+    r"padariga\w*",
+    r"iflos\w*",
+    r"xezalak\w*",
+    r"гей\w*",
+    r"gey\w*",
+]
 
+VULGAR_REGEX = re.compile(
+    r"(?i)\b(" + "|".join(VULGAR_PATTERNS) + r")\b",
+    re.UNICODE
+)
+
+# Secondary character-substitution map to prevent common leetspeak bypasses
+LEET_MAP = str.maketrans({
+    '@': 'a',
+    '4': 'a',
+    '0': 'o',
+    '1': 'i',
+    '!': 'i',
+    '$': 's',
+    '3': 'e',
+    'x': 'h',  # normalize variations like nahuy / naxuy
+})
+
+def is_vulgar(text: str) -> bool:
+    """Checks if a message contains blocked profanities, spaced bypasses, or leetspeak."""
+    if not text:
+        return False
+
+    # 1. Standard word boundary check
+    if VULGAR_REGEX.search(text):
+        return True
+
+    # 2. Check normalized leetspeak substitutions
+    normalized_text = text.translate(LEET_MAP)
+    if VULGAR_REGEX.search(normalized_text):
+        return True
+
+    # 3. Detect spaced-out evasions (e.g., 'n a x u y', 'l o x', 'r a p e')
+    condensed = re.sub(r"[^\w]", "", normalized_text.lower())
+    if VULGAR_REGEX.search(condensed):
+        return True
+
+    return False
 # Strict single-letter match: rejects "a b c d", "abcd", or random chatter
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
@@ -345,10 +453,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     text = update.message.text.strip()
-    if not round_state["active"]:
+  1. SILENT PROFANITY CENSOR (Deletes bad messages immediately with 0 tokens)
+    if is_vulgar(text):
+        try:
+            await update.message.delete()
+        except Exception as e:
+            logger.warning(f"Could not delete vulgar message: {e}")
         return
 
+    # Don't process non-group messages
     if update.effective_chat.id != GROUP_CHAT_ID:
+        return
+
+    # 2. QUIZ LOGIC (Rest of handle_message continues unchanged)
+    if not round_state["active"]:
         return
 
     match = ANSWER_PATTERN.match(text)
