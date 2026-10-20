@@ -344,7 +344,24 @@ def get_working_groq_model():
         logger.error(f"Failed to inspect Groq model list: {e}")
     return "openai/gpt-oss-20b"
 
+def get_grade_info(q_num: int):
+    """Calculates school grade level based on 1,000 questions per tier."""
+    grade_num = 5 + ((q_num - 1) // 1000)
+    if grade_num <= 11:
+        label = f"{grade_num}-sinf"
+        score = f"{grade_num - 4}/10"
+    elif grade_num <= 15:
+        label = "Oliy ta'lim (Bakalavr)"
+        score = "8/10"
+    else:
+        label = "Akademik / Ekspert"
+        score = "10/10"
+    return label, score
+    
+
 def fetch_question(q_num, recent_history):
+    grade_label, grade_score = get_grade_info(q_num)
+
     # Cadence: 1 in every 4 questions is Islamic history / religion
     if q_num % 4 == 0:
         chosen_topic = random.choice(ISLAMIC_TOPIC_POOLS)
@@ -356,33 +373,34 @@ def fetch_question(q_num, recent_history):
     history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "Hozircha yo'q"
 
     prompt = f"""
-    Sen Telegram viktorinasi uchun ORIGINAL, QIZIQARLI va O'RTACHA DARAJADAGI savol tuzuvchisan.
+    Sen Telegram viktorinasi uchun SAVOL TUZUVCHI pedagog va mutaxassissan.
     Hozirgi savol raqami: #{q_num} / 1 000 000.
     Unikal kalit: {cache_buster}.
     
+    QAT'IY BOSQICH VA DARAJA TALABI:
+    - Hozirgi daraja: **{grade_label}** darajasi ({grade_score}).
+    - Savol murakkabligi, tili, variantlari va mantiqi aynan **{grade_label}** o'quvchisi yoki o'sha yoshdagi inson qiynalmasdan tushunadigan soddalikda bo'lsin.
+    - O'ta qiyin ilmiy terminlar, chalkash tafsilotlar yoki akademik ensiklopediya savollarini BERMA!
+    - Agar mavzu maktab dasturida bo'lmasa ham (masalan, Kosmonavtika, Kriptografiya yoki Islom tarixi), uni aynan {grade_label} o'quvchisining dunyoqarashi va aqliga moslab, juda sodda va qiziqarli qilib tuz.
+
     MAVZU: {chosen_topic}
     USLUB: {chosen_angle}
     
-    QAT'IY QOIDALAR VA FORMAT:
-    1. SAVOL DARAJASI:
-       - Savollar haddan tashqari qiyin, ilmiy atamalar bilan chalkashtiruvchi bo'lmasin.
-       - Oddiy, kengroq qatlam tushunadigan, lekin qiziqarli (Oson yoki O'rta darajada) bo'lsin.
-       - Darajani aniq belgilang: "Oson", "O'rta" yoki "Murakkab", va 1/10 dan 10/10 gacha shkala bering (masalan: 3/10, 5/10, 6/10).
-    2. LINGVISTIK VA SO'Z KELIB CHIQISHI TAQIQLANADI:
-       - 'Qaysi tildan olingan?', 'Atama ma'nosi nima?' kabi etimologik savollarni ASLO berma.
-    3. SO'NGGI SAVOLLAR TAKRORLANMASIN:
+    QO'SHIMCHA TAQIQLAR:
+    1. LINGVISTIK VA SO'Z KELIB CHIQISHI TAQIQLANADI ('qaysi tildan olingan', 'ma'nosi nima' kabi savollar aslo bo'lmasin).
+    2. SO'NGGI SAVOLLAR TAKRORLANMASIN:
     {history_block}
-    4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
+    3. Variantlar aniq, tushunarli bo'lsin. Faqat 1 ta to'g'ri javob.
     
     Faqat quyidagi JSON formatida javob ber (hech qanday markdown kod blokisiz):
     {{
         "subject": "{chosen_topic.split(':')[0].strip()}",
-        "difficulty_label": "O'rta",
-        "difficulty_score": "5/10",
+        "grade": "{grade_label}",
+        "difficulty_score": "{grade_score}",
         "question": "Savol matni o'zbek tilida",
         "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
         "correct": "A",
-        "explanation": "Qisqa tushuntirish (1-2 gap)"
+        "explanation": "Qisqa va bolalar ham tushunadigan sodda tushuntirish (1-2 gap)"
     }}
     """
     
@@ -399,7 +417,7 @@ def fetch_question(q_num, recent_history):
             {"role": "user", "content": prompt}
         ],
         "response_format": {"type": "json_object"},
-        "temperature": 0.8
+        "temperature": 0.7
     }
     
     try:
@@ -411,18 +429,18 @@ def fetch_question(q_num, recent_history):
             
         raw_text = data['choices'][0]['message']['content'].strip()
         parsed = json.loads(raw_text)
-        logger.info(f"Groq generated: {parsed.get('question')[:40]}...")
+        logger.info(f"Groq generated ({grade_label}): {parsed.get('question')[:40]}...")
         return parsed
     except Exception as e:
         logger.error(f"Groq request failed: {e}", exc_info=True)
         return {
-            "subject": "Astronomiya",
-            "difficulty_label": "Oson",
-            "difficulty_score": "3/10",
-            "question": "Quyosh sistemasidagi eng katta sayyora qaysi?",
-            "options": {"A": "Yupiter", "B": "Saturn", "C": "Neptun", "D": "Uran"},
+            "subject": "Tarix",
+            "grade": grade_label,
+            "difficulty_score": grade_score,
+            "question": "Amir Temur davlatining poytaxti qaysi shahar bo'lgan?",
+            "options": {"A": "Samarqand", "B": "Buxoro", "C": "Toshkent", "D": "Xiva"},
             "correct": "A",
-            "explanation": "Yupiter Quyosh tizimidagi eng ulkan gigant gaz sayyorasidir."
+            "explanation": "Amir Temur Samarqand shahrini o'z saltanatining poytaxti etib belgilagan va uni dunyoning eng go'zal shahriga aylantirgan."
         }
 
 # --- Round Engine ---
@@ -442,9 +460,12 @@ async def post_hourly_question(app):
     round_state["question_text"] = data["question"]
     round_state["attempted_users"].clear()
     
+    grade_label = data.get("grade", "5-sinf")
+    diff_score = data.get("difficulty_score", "1/10")
+    
     msg_text = (
         f"🏆 1 MILLION QUESTIONS · #{q_num:07d}\n"
-        f"📚 Fan: {data['subject']}\n\n"
+        f"📚 Fan: {data['subject']} | 🎓 Bosqich: {grade_label} ({diff_score})\n\n"
         f"❓ {data['question']}\n\n"
         f"A) {data['options']['A']}\n"
         f"B) {data['options']['B']}\n"
@@ -453,7 +474,7 @@ async def post_hourly_question(app):
         f"⚡ To‘g‘ri variant harfini yozing (A, B, C yoki D)! Har bir kishiga 1 ta urinish."
     )
     await app.bot.send_message(GROUP_CHAT_ID, msg_text)
-    logger.info(f"Question #{q_num} posted. Correct: {round_state['correct']}")
+    logger.info(f"Question #{q_num} ({grade_label}) posted. Correct: {round_state['correct']}")
 
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global round_state
