@@ -10,12 +10,11 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 import pytz
 import requests
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
     CommandHandler,
-    CallbackQueryHandler,
     filters,
     ContextTypes
 )
@@ -43,11 +42,7 @@ CYRILLIC_TO_LATIN = {
     'D': 'D', 'd': 'D', 'Д': 'D', 'д': 'D'
 }
 
-# Intake window: 15s server-side gives players an actual 10-12s on their screens
 INITIAL_WINDOW_SECONDS = 15
-
-# Cache for alert explanations: {q_num: {...}}
-EXPLANATIONS_CACHE = {}
 
 # --- Vulgarity, Harassment & Profanity Filter ---
 VULGAR_PATTERNS = [
@@ -98,7 +93,7 @@ VULGAR_PATTERNS = [
     r"debil\w*",
     r"далба[её]б\w*",
     r"dalba[ye]ob\w*",
-    # yban / yeban / eban variants (Latin + Cyrillic + elongations)
+    # yban / yeban / eban variants
     r"y+e*b+a+[nŋ]\w*",
     r"e+b+a+[nŋ]\w*",
     r"y+e*b+l+a+[nŋ]\w*",
@@ -214,7 +209,7 @@ round_state = {
     "correct": None,
     "options": {},
     "explanation": "",
-    "popup_explanation": "",
+    "detailed_explanation": "",
     "question_text": "",
     "attempted_users": set(),
     "in_initial_window": False,
@@ -339,9 +334,26 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         logger.error(f"Failed to update pin: {e}")
         return ""
 
-# --- JSON Cleaning & Grade Level Calculator ---
+# --- HTML Safe Helper & Expandable Blockquote Formatter ---
+def escape_tg_html(text: str) -> str:
+    """Escapes only HTML reserved characters without altering apostrophes."""
+    if not text:
+        return ""
+    return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
+
+def format_izoh_block(explanation: str, detailed: str) -> str:
+    """Renders short explanation followed by an expandable collapsible quote block."""
+    clean_expl = escape_tg_html(explanation)
+    clean_detail = escape_tg_html(detailed)
+    if clean_detail and clean_detail.strip() != clean_expl.strip():
+        return (
+            f"💡 <b>Izoh:</b> {clean_expl}\n\n"
+            f"<blockquote expandable>📖 <b>Batafsil ma'lumot (o'qish uchun bosing):</b>\n\n"
+            f"{clean_detail}</blockquote>"
+        )
+    return f"💡 <b>Izoh:</b> {clean_expl}"
+
 def clean_json_response(raw_text: str) -> dict:
-    """Safely extracts JSON even if the model wraps it in markdown or comments."""
     cleaned = raw_text.strip()
     cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
     cleaned = re.sub(r"```$", "", cleaned).strip()
@@ -351,7 +363,6 @@ def clean_json_response(raw_text: str) -> dict:
     return json.loads(cleaned)
 
 def get_grade_info(q_num: int):
-    """Calculates school grade level based on 1,000 questions per tier."""
     grade_num = 5 + ((q_num - 1) // 1000)
     if grade_num <= 11:
         label = f"{grade_num}-sinf"
@@ -364,7 +375,7 @@ def get_grade_info(q_num: int):
         score = "10/10"
     return label, score
 
-# --- Diverse Offline Fallback Pool (Under 180 chars for modal popups) ---
+# --- Offline Fallback Questions ---
 OFFLINE_BACKUP_QUESTIONS = [
     {
         "subject": "Astronomiya",
@@ -372,7 +383,7 @@ OFFLINE_BACKUP_QUESTIONS = [
         "options": {"A": "Yupiter", "B": "Saturn", "C": "Mars", "D": "Venera"},
         "correct": "A",
         "explanation": "Yupiter Quyosh tizimidagi eng ulkan gigant gaz sayyorasidir.",
-        "popup_explanation": "Yupiter sayyorasi shu qadar ulkanki, uning ichiga barcha sayyoralar bemalol sig'adi. 'Katta Qizil Dog'' esa undagi 300 yillik gigant bo'rondir."
+        "detailed_explanation": "Yupiter sayyorasi shu qadar ulkanki, uning ichiga Quyosh tizimidagi barcha boshqa sayyoralarni bemalol joylashtirish mumkin. U asosan vodorod va geliydan iborat bo'lib, o'zining kuchli magnit maydoniga ega. Mashhur 'Katta Qizil Dog'' esa unda kamida 300 yildan beri to'xtamayotgan ulkan bo'rondir."
     },
     {
         "subject": "Biologiya",
@@ -380,7 +391,7 @@ OFFLINE_BACKUP_QUESTIONS = [
         "options": {"A": "Fotosintez", "B": "Nafas olish", "C": "Transpiratsiya", "D": "Diffuziya"},
         "correct": "A",
         "explanation": "Fotosintez jarayonida xlorofill yorug'lik energiyasini kimyoviy energiyaga aylantiradi.",
-        "popup_explanation": "Fotosintez — yer yuzidagi hayot asosi. O'simliklar quyosh nuri va karbonat angidriddan oziq va biz nafas oladigan kislorodni hosil qiladi."
+        "detailed_explanation": "Fotosintez — yer yuzidagi barcha tiriklikning asosi. Yashil o'simliklar barglaridagi xloroplastlar yorug'lik, suv va karbonat angidriddan foydalanib oziq moddalar hamda biz nafas oladigan toza kislorodni ishlab chiqaradi."
     },
     {
         "subject": "Geografiya",
@@ -388,7 +399,7 @@ OFFLINE_BACKUP_QUESTIONS = [
         "options": {"A": "Baykal", "B": "Kaspiy", "C": "Viktoriya", "D": "Michigan"},
         "correct": "A",
         "explanation": "Baykal ko'li dunyodagi eng qadimgi va eng chuqur (1642 metr) chuchuk suv havzasidir.",
-        "popup_explanation": "Baykal dunyodagi eng chuqur (1642 m) ko'l bo'lib, yer yuzidagi barcha chuchuk suv zaxirasining 20% qismini o'zida saqlaydi."
+        "detailed_explanation": "Baykal ko'li Sibir janubida joylashgan bo'lib, uning yoshi 25 million yildan oshiq. U dunyodagi barcha erigan toza chuchuk suv zaxirasining salkam 20 foizini o'zida saqlaydi."
     },
     {
         "subject": "O'zbekiston tarixi",
@@ -396,7 +407,7 @@ OFFLINE_BACKUP_QUESTIONS = [
         "options": {"A": "Samarqand", "B": "Buxoro", "C": "Xiva", "D": "Termiz"},
         "correct": "A",
         "explanation": "Afrosiyob qadimiy Samarqandning 13-asrgacha bo'lgan dastlabki o'rni hisoblanadi.",
-        "popup_explanation": "Afrosiyob — qadimiy Samarqandning 1220-yil mo'g'ullar bosqiniga qadar bo'lgan asl o'rni. U yerdan nodir 7-asr devoriy suratlari topilgan."
+        "detailed_explanation": "Afrosiyob tepaliklari qadimiy So'g'd poytaxti Samarqandning asl o'rnidir. 1220-yilda Chingizxon qo'shinlari vayron qilgunga qadar shahar aholisi shu yerda yashagan. U yerdan topilgan 'Elchilar zali' devoriy suratlari 7-asr madaniyatining noyob durdonasidir."
     },
     {
         "subject": "Fizika",
@@ -404,7 +415,7 @@ OFFLINE_BACKUP_QUESTIONS = [
         "options": {"A": "100°C", "B": "90°C", "C": "80°C", "D": "120°C"},
         "correct": "A",
         "explanation": "Dengiz sathidagi normal atmosfera bosimida toza suv 100°C da qaynaydi.",
-        "popup_explanation": "Qaynash bosimga bog'liq: dengiz sathida suv 100°C da qaynasa, baland tog'larda (Everestda) past bosim sabab 70°C dayoq qaynaydi."
+        "detailed_explanation": "Qaynash nuqtasi atmosfera bosimiga bevosita bog'liq. Dengiz sathida 1 atmosfera bosimida suv 100°C da qaynasa, baland tog'larda (masalan, Everestda) past atmosfera bosimi tufayli suv 70°C dayoq qaynay boshlaydi."
     },
     {
         "subject": "Islom tarixi",
@@ -412,7 +423,7 @@ OFFLINE_BACKUP_QUESTIONS = [
         "options": {"A": "Makka", "B": "Madina", "C": "Toif", "D": "Quddus"},
         "correct": "A",
         "explanation": "Payg'ambarimiz (s.a.v.) milodiy 571-yilda Makka shahrida tavallud topganlar.",
-        "popup_explanation": "Payg'ambarimiz (s.a.v.) 571-yilda Makkada tavallud topganlar va 40 yoshlarida Hiro g'orida ilk vahiy qabul qilib, Islom da'vatini boshlaganlar."
+        "detailed_explanation": "Payg'ambarimiz Muhammad (s.a.v.) milodiy 571-yil Makka shahrida dunyoga kelganlar. 40 yoshlarida Makka yaqinidagi Hiro g'orida ilk vahiy qabul qilib, Islom da'vatini aynan Makka zaminida boshlaganlar."
     }
 ]
 
@@ -450,8 +461,8 @@ def fetch_question(q_num, recent_history):
     3. Agar mavzu Islom dini yoki tarixiga oid bo'lsa, savol faqat sahih manbalar asosida, hurmat bilan tuzilsin.
     4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
     
-    QAT'IY CHEKLOV (popup_explanation):
-    - popup_explanation matni Telegram modal oynasi uchun bo'lib, MAKSIMAL 170 TA BELGIDAN OSHMASIN! Qisqa, qiziqarli va lo'nda fakt bo'lsin.
+    BATAFSIL IZOH TALABI:
+    - 'detailed_explanation' maydonida mavzuning qiziqarli ilmiy/tarixiy sabab-oqibatlari, fonga oid tafsilotlari va qiziqarli faktlarini 2-3 xatboshida chiroyli tushuntirib ber. Bu matn Telegramda ochilib-yopiluvchi blokda ko'rinadi.
     
     Faqat toza JSON formatida javob ber:
     {{
@@ -462,7 +473,7 @@ def fetch_question(q_num, recent_history):
         "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
         "correct": "A",
         "explanation": "Qisqa tushuntirish (1 gap)",
-        "popup_explanation": "Modal oyna uchun qiziqarli ilmiy yoki tarixiy fakt (Maksimal 170 ta belgi!)"
+        "detailed_explanation": "Kengaytirilgan tahlil, qiziqarli faktlar va sabab-oqibatlar (2-3 xatboshi)"
     }}
     """
 
@@ -471,10 +482,11 @@ def fetch_question(q_num, recent_history):
         "Content-Type": "application/json"
     }
 
+    # 120b first for highest stability and zero rate-limit issues
     models_to_try = [
-        "openai/gpt-oss-20b",
         "openai/gpt-oss-120b",
-        "qwen/qwen3.8-27b"
+        "qwen/qwen3.8-27b",
+        "openai/gpt-oss-20b"
     ]
 
     for model in models_to_try:
@@ -500,8 +512,8 @@ def fetch_question(q_num, recent_history):
             if "question" in parsed and "options" in parsed and "correct" in parsed:
                 parsed["grade"] = grade_label
                 parsed["difficulty_score"] = grade_score
-                if "popup_explanation" not in parsed or not parsed["popup_explanation"]:
-                    parsed["popup_explanation"] = parsed.get("explanation", "")
+                if "detailed_explanation" not in parsed or not parsed["detailed_explanation"]:
+                    parsed["detailed_explanation"] = parsed.get("explanation", "")
                 logger.info(f"Groq generated successfully using {model}: {parsed['question'][:40]}...")
                 return parsed
 
@@ -517,47 +529,6 @@ def fetch_question(q_num, recent_history):
     selected_backup["grade"] = grade_label
     selected_backup["difficulty_score"] = grade_score
     return selected_backup
-
-# --- Callback Helpers for Native Alert Pop-up Menu ---
-def build_explanation_keyboard(q_num: int):
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📖 Izoh (Pop-up)", callback_data=f"explain_{q_num}")]
-    ])
-
-async def callback_explain(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Triggers Telegram's native modal dialog box (show_alert=True) directly on user's screen."""
-    query = update.callback_query
-    data = query.data
-    if not data or not data.startswith("explain_"):
-        await query.answer()
-        return
-
-    try:
-        q_num = int(data.split("_")[1])
-    except ValueError:
-        await query.answer("Xatolik yuz berdi.", show_alert=True)
-        return
-
-    info = EXPLANATIONS_CACHE.get(q_num)
-    if not info:
-        await query.answer("ℹ️ Ushbu savol izohi arxivdan o'chirilgan.", show_alert=True)
-        return
-
-    # Telegram show_alert text has a strict limit of 200 characters max
-    raw_text = (
-        info.get("popup_explanation")
-        or info.get("explanation")
-        or ""
-    ).strip()
-
-    # Safety clamp: never exceed Telegram's 200-character ceiling
-    if len(raw_text) > 195:
-        alert_text = raw_text[:192] + "..."
-    else:
-        alert_text = raw_text
-
-    # Native modal dialog with OK button - visible ONLY to the clicker!
-    await query.answer(text=alert_text, show_alert=True)
 
 # --- Intake Window Evaluator ---
 async def evaluate_initial_window(app, target_q_num: int):
@@ -597,7 +568,7 @@ async def evaluate_initial_window(app, target_q_num: int):
             name = user.first_name or "O‘yinchi"
             pts = points_map[idx]
             scores[name] = scores.get(name, 0) + pts
-            winners_lines.append(f"{medals[idx]} {name} — +{pts} ball ({idx + 1}-o‘rin)")
+            winners_lines.append(f"{medals[idx]} {escape_tg_html(name)} — +{pts} ball ({idx + 1}-o‘rin)")
 
         leaderboard_str = await update_pin(
             app.bot,
@@ -612,20 +583,22 @@ async def evaluate_initial_window(app, target_q_num: int):
         extra_correct = len(unique_correct) - 3
         extra_note = f"\n👏 Yana {extra_correct} kishi to‘g‘ri topdi, ammo shohsupaga ulgurmadi!" if extra_correct > 0 else ""
 
+        izoh_formatted = format_izoh_block(round_state['explanation'], round_state['detailed_explanation'])
+
         reply = (
-            f"⏰ DASTLABKI VAQT TUGADI!\n\n"
-            f"🎯 TO‘G‘RI JAVOB: {correct_choice}) {ans_text}\n"
-            f"💡 Izoh: {round_state['explanation']}\n\n"
-            f"⚡ G‘OLIBLAR VA BALLAR:\n"
+            f"⏰ <b>DASTLABKI VAQT TUGADI!</b>\n\n"
+            f"🎯 <b>TO‘G‘RI JAVOB:</b> {correct_choice}) {escape_tg_html(ans_text)}\n"
+            f"{izoh_formatted}\n\n"
+            f"⚡ <b>G‘OLIBLAR VA BALLAR:</b>\n"
             f"{winners_block}{extra_note}\n\n"
-            f"📊 TOP-10 REYTINQ:\n"
-            f"{leaderboard_str}\n\n"
+            f"📊 <b>TOP-10 REYTINQ:</b>\n"
+            f"{escape_tg_html(leaderboard_str)}\n\n"
             f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
         )
         await app.bot.send_message(
             GROUP_CHAT_ID, 
             reply, 
-            reply_markup=build_explanation_keyboard(target_q_num)
+            parse_mode="HTML"
         )
     else:
         if answers:
@@ -646,6 +619,7 @@ async def post_hourly_question(app):
         prev_correct = round_state["correct"]
         prev_ans = round_state["options"].get(prev_correct, "")
         prev_expl = round_state["explanation"]
+        prev_detailed = round_state["detailed_explanation"]
         prev_q_text = round_state["question_text"]
 
         try:
@@ -659,17 +633,18 @@ async def post_hourly_question(app):
                 new_question_summary=prev_q_text
             )
 
+            izoh_formatted = format_izoh_block(prev_expl, prev_detailed)
             timeout_msg = (
-                f"⏰ VAQT TUGADI! (#{prev_q_num:07d})\n\n"
+                f"⏰ <b>VAQT TUGADI!</b> (#{prev_q_num:07d})\n\n"
                 f"Hech kim to‘g‘ri javob bera olmadi.\n"
-                f"✅ To‘g‘ri javob: {prev_correct}) {prev_ans}\n"
-                f"💡 Izoh: {prev_expl}\n\n"
+                f"✅ <b>To‘g‘ri javob:</b> {prev_correct}) {escape_tg_html(prev_ans)}\n"
+                f"{izoh_formatted}\n\n"
                 f"⚡ Keyingi savol chiqmoqda..."
             )
             await app.bot.send_message(
                 GROUP_CHAT_ID, 
                 timeout_msg, 
-                reply_markup=build_explanation_keyboard(prev_q_num)
+                parse_mode="HTML"
             )
             await asyncio.sleep(2)
         except Exception as e:
@@ -686,26 +661,12 @@ async def post_hourly_question(app):
     round_state["correct"] = data["correct"].upper()
     round_state["options"] = data["options"]
     round_state["explanation"] = data["explanation"]
-    round_state["popup_explanation"] = data.get("popup_explanation", data["explanation"])
+    round_state["detailed_explanation"] = data.get("detailed_explanation", data["explanation"])
     round_state["question_text"] = data["question"]
     round_state["attempted_users"].clear()
     round_state["first_10s_answers"].clear()
     round_state["answered_names"].clear()
     round_state["in_initial_window"] = True
-    
-    # Cache for pop-up alert
-    EXPLANATIONS_CACHE[q_num] = {
-        "subject": data.get("subject", "Umumiy"),
-        "grade": data.get("grade", "5-sinf"),
-        "question": data.get("question", ""),
-        "correct_letter": round_state["correct"],
-        "correct_text": round_state["options"].get(round_state["correct"], ""),
-        "explanation": data.get("explanation", ""),
-        "popup_explanation": round_state["popup_explanation"]
-    }
-    if len(EXPLANATIONS_CACHE) > 50:
-        oldest = min(EXPLANATIONS_CACHE.keys())
-        del EXPLANATIONS_CACHE[oldest]
     
     grade_label = data.get("grade", "5-sinf")
     diff_score = data.get("difficulty_score", "1/10")
@@ -807,7 +768,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if choice == round_state["correct"]:
             round_state["active"] = False
             winner_name = user_name
-            q_num = round_state["q_num"]
             
             pin = await get_or_create_leaderboard(context.bot)
             curr_q, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
@@ -823,19 +783,21 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             correct_letter = round_state["correct"]
             ans_text = round_state["options"].get(correct_letter, "")
             
+            izoh_formatted = format_izoh_block(round_state['explanation'], round_state['detailed_explanation'])
+
             reply = (
-                f"🎯 TO‘G‘RI JAVOB!\n\n"
-                f"⚡ G‘olib: {winner_name} (+10 ball!)\n"
-                f"✅ Javob: {correct_letter}) {ans_text}\n"
-                f"💡 Izoh: {round_state['explanation']}\n\n"
-                f"📊 TOP-10 REYTINQ:\n"
-                f"{leaderboard_str}\n\n"
+                f"🎯 <b>TO‘G‘RI JAVOB!</b>\n\n"
+                f"⚡ <b>G‘olib:</b> {escape_tg_html(winner_name)} (+10 ball!)\n"
+                f"✅ <b>Javob:</b> {correct_letter}) {escape_tg_html(ans_text)}\n"
+                f"{izoh_formatted}\n\n"
+                f"📊 <b>TOP-10 REYTINQ:</b>\n"
+                f"{escape_tg_html(leaderboard_str)}\n\n"
                 f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
             )
             await context.bot.send_message(
                 GROUP_CHAT_ID, 
                 reply, 
-                reply_markup=build_explanation_keyboard(q_num)
+                parse_mode="HTML"
             )
     except Exception as e:
         logger.error(f"Error handling sudden death answer: {e}", exc_info=True)
@@ -885,10 +847,10 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     round_state["active"] = False
-    q_num = round_state["q_num"]
     correct_letter = round_state["correct"]
     ans_text = round_state["options"].get(correct_letter, "")
     explanation = round_state["explanation"]
+    detailed = round_state["detailed_explanation"]
     q_text = round_state["question_text"]
     
     pin = await get_or_create_leaderboard(context.bot)
@@ -901,16 +863,14 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_question_summary=q_text
     )
     
+    izoh_formatted = format_izoh_block(explanation, detailed)
     reply = (
-        f"⏭ SAVOL O'TKAZIB YUBORILDI (Admin tomonidan)\n\n"
-        f"✅ To‘g‘ri javob: {correct_letter}) {ans_text}\n"
-        f"💡 Izoh: {explanation}\n\n"
+        f"⏭ <b>SAVOL O'TKAZIB YUBORILDI</b> (Admin tomonidan)\n\n"
+        f"✅ <b>To‘g‘ri javob:</b> {correct_letter}) {escape_tg_html(ans_text)}\n"
+        f"{izoh_formatted}\n\n"
         f"⏳ Keyingi savol 5 daqiqadan so‘ng yoki /test orqali chiqadi."
     )
-    await update.message.reply_text(
-        reply, 
-        reply_markup=build_explanation_keyboard(q_num)
-    )
+    await update.message.reply_text(reply, parse_mode="HTML")
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
@@ -1004,7 +964,6 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("skip", cmd_skip))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("status", cmd_status))
-    app.add_handler(CallbackQueryHandler(callback_explain, pattern=r"^explain_\d+$"))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
     app.run_polling()
