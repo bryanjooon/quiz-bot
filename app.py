@@ -46,7 +46,7 @@ CYRILLIC_TO_LATIN = {
 # Intake window: 15s server-side gives players an actual 10-12s on their screens
 INITIAL_WINDOW_SECONDS = 15
 
-# Cache for detailed explanations: {q_num: {...}}
+# Cache for alert explanations: {q_num: {...}}
 EXPLANATIONS_CACHE = {}
 
 # --- Vulgarity, Harassment & Profanity Filter ---
@@ -214,7 +214,7 @@ round_state = {
     "correct": None,
     "options": {},
     "explanation": "",
-    "detailed_explanation": "",
+    "popup_explanation": "",
     "question_text": "",
     "attempted_users": set(),
     "in_initial_window": False,
@@ -364,7 +364,7 @@ def get_grade_info(q_num: int):
         score = "10/10"
     return label, score
 
-# --- Diverse Offline Fallback Pool (With Rich Explanations) ---
+# --- Diverse Offline Fallback Pool (Under 180 chars for modal popups) ---
 OFFLINE_BACKUP_QUESTIONS = [
     {
         "subject": "Astronomiya",
@@ -372,7 +372,7 @@ OFFLINE_BACKUP_QUESTIONS = [
         "options": {"A": "Yupiter", "B": "Saturn", "C": "Mars", "D": "Venera"},
         "correct": "A",
         "explanation": "Yupiter Quyosh tizimidagi eng ulkan gigant gaz sayyorasidir.",
-        "detailed_explanation": "Yupiter sayyorasi shu qadar ulkanki, uning ichiga Quyosh tizimidagi barcha boshqa sayyoralarni bemalol joylashtirish mumkin. U asosan vodorod va geliydan iborat. Mashhur 'Katta Qizil Dog'' esa Yupiterda kamida 300 yildan beri to'xtamayotgan ulkan gigant bo'rondir."
+        "popup_explanation": "Yupiter sayyorasi shu qadar ulkanki, uning ichiga barcha sayyoralar bemalol sig'adi. 'Katta Qizil Dog'' esa undagi 300 yillik gigant bo'rondir."
     },
     {
         "subject": "Biologiya",
@@ -380,7 +380,7 @@ OFFLINE_BACKUP_QUESTIONS = [
         "options": {"A": "Fotosintez", "B": "Nafas olish", "C": "Transpiratsiya", "D": "Diffuziya"},
         "correct": "A",
         "explanation": "Fotosintez jarayonida xlorofill yorug'lik energiyasini kimyoviy energiyaga aylantiradi.",
-        "detailed_explanation": "Fotosintez — yer yuzidagi hayotning asosiy poydevori. Yashil o'simliklar barglaridagi xloroplastlar quyosh nuri, suv va karbonat angidriddan foydalanib glyukoza (shakar) va kislorod sintez qiladi. Nafas olayotgan kislorodimizning asosiy qismi aynan o'simliklar va dengiz fitoplanktonlari orqali yaratiladi."
+        "popup_explanation": "Fotosintez — yer yuzidagi hayot asosi. O'simliklar quyosh nuri va karbonat angidriddan oziq va biz nafas oladigan kislorodni hosil qiladi."
     },
     {
         "subject": "Geografiya",
@@ -388,7 +388,7 @@ OFFLINE_BACKUP_QUESTIONS = [
         "options": {"A": "Baykal", "B": "Kaspiy", "C": "Viktoriya", "D": "Michigan"},
         "correct": "A",
         "explanation": "Baykal ko'li dunyodagi eng qadimgi va eng chuqur (1642 metr) chuchuk suv havzasidir.",
-        "detailed_explanation": "Baykal ko'li Sibirning janubida joylashgan bo'lib, uning yoshi 25 million yildan oshiq. U yer yuzidagi barcha erigan chuchuk suvning salkam 20 foizini o'zida saqlaydi. Ko'l suvi shunchalik toza va shaffofki, 40 metr chuqurlikdagi toshlarni ham bemalol ko'rish mumkin."
+        "popup_explanation": "Baykal dunyodagi eng chuqur (1642 m) ko'l bo'lib, yer yuzidagi barcha chuchuk suv zaxirasining 20% qismini o'zida saqlaydi."
     },
     {
         "subject": "O'zbekiston tarixi",
@@ -396,7 +396,7 @@ OFFLINE_BACKUP_QUESTIONS = [
         "options": {"A": "Samarqand", "B": "Buxoro", "C": "Xiva", "D": "Termiz"},
         "correct": "A",
         "explanation": "Afrosiyob qadimiy Samarqandning 13-asrgacha bo'lgan dastlabki o'rni hisoblanadi.",
-        "detailed_explanation": "Afrosiyob tepaliklari qadimiy So'g'diyona poytaxti Samarqandning asl o'rnidir. 1220-yilda Chingizxon qo'shinlari shaharni vayron qilgunga qadar shahar aholisi aynan shu tepalikda yashagan. U yerdan topilgan 'Elchilar zali' devoriy suratlari 7-asr O'rta Osiyo diplomatiyasi va madaniyatining nodir yodgorligidir."
+        "popup_explanation": "Afrosiyob — qadimiy Samarqandning 1220-yil mo'g'ullar bosqiniga qadar bo'lgan asl o'rni. U yerdan nodir 7-asr devoriy suratlari topilgan."
     },
     {
         "subject": "Fizika",
@@ -404,7 +404,7 @@ OFFLINE_BACKUP_QUESTIONS = [
         "options": {"A": "100°C", "B": "90°C", "C": "80°C", "D": "120°C"},
         "correct": "A",
         "explanation": "Dengiz sathidagi normal atmosfera bosimida toza suv 100°C da qaynaydi.",
-        "detailed_explanation": "Qaynash nuqtasi atmosfera bosimiga bevosita bog'liq. Dengiz sathida bosim 1 atmosfera bo'lgani sababli suv 100°C da qaynaydi. Ammo baland tog'larda (masalan, Everest cho'qqisida) havo bosimi pastligi sababli suv bor-yo'g'i 70°C atrofida qaynashni boshlaydi."
+        "popup_explanation": "Qaynash bosimga bog'liq: dengiz sathida suv 100°C da qaynasa, baland tog'larda (Everestda) past bosim sabab 70°C dayoq qaynaydi."
     },
     {
         "subject": "Islom tarixi",
@@ -412,7 +412,7 @@ OFFLINE_BACKUP_QUESTIONS = [
         "options": {"A": "Makka", "B": "Madina", "C": "Toif", "D": "Quddus"},
         "correct": "A",
         "explanation": "Payg'ambarimiz (s.a.v.) milodiy 571-yilda Makka shahrida tavallud topganlar.",
-        "detailed_explanation": "Payg'ambarimiz Muhammad (s.a.v.) milodiy 571-yil Fil yilida Makka shahrida, Quraysh qabilasining Hoshimiylar xonadonida dunyoga kelganlar. U zot 40 yoshlarida Makka yaqinidagi Hiro g'orida ilk vahiy qabul qilib, Islom da'vatini aynan Makka zaminida boshlaganlar."
+        "popup_explanation": "Payg'ambarimiz (s.a.v.) 571-yilda Makkada tavallud topganlar va 40 yoshlarida Hiro g'orida ilk vahiy qabul qilib, Islom da'vatini boshlaganlar."
     }
 ]
 
@@ -450,6 +450,9 @@ def fetch_question(q_num, recent_history):
     3. Agar mavzu Islom dini yoki tarixiga oid bo'lsa, savol faqat sahih manbalar asosida, hurmat bilan tuzilsin.
     4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
     
+    QAT'IY CHEKLOV (popup_explanation):
+    - popup_explanation matni Telegram modal oynasi uchun bo'lib, MAKSIMAL 170 TA BELGIDAN OSHMASIN! Qisqa, qiziqarli va lo'nda fakt bo'lsin.
+    
     Faqat toza JSON formatida javob ber:
     {{
         "subject": "{chosen_topic.split(':')[0].strip()}",
@@ -458,8 +461,8 @@ def fetch_question(q_num, recent_history):
         "question": "Savol matni o'zbek tilida",
         "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
         "correct": "A",
-        "explanation": "Qisqa tushuntirish (1-2 gap)",
-        "detailed_explanation": "Kengaytirilgan, qiziqarli va chuqurroq ilmiy/tarixiy tushuntirish (mavzuning kelib chiqishi, qiziq faktlar va sabab-oqibatlari bilan 2-3 xatboshi, sodda tilda)"
+        "explanation": "Qisqa tushuntirish (1 gap)",
+        "popup_explanation": "Modal oyna uchun qiziqarli ilmiy yoki tarixiy fakt (Maksimal 170 ta belgi!)"
     }}
     """
 
@@ -497,8 +500,8 @@ def fetch_question(q_num, recent_history):
             if "question" in parsed and "options" in parsed and "correct" in parsed:
                 parsed["grade"] = grade_label
                 parsed["difficulty_score"] = grade_score
-                if "detailed_explanation" not in parsed or not parsed["detailed_explanation"]:
-                    parsed["detailed_explanation"] = parsed.get("explanation", "")
+                if "popup_explanation" not in parsed or not parsed["popup_explanation"]:
+                    parsed["popup_explanation"] = parsed.get("explanation", "")
                 logger.info(f"Groq generated successfully using {model}: {parsed['question'][:40]}...")
                 return parsed
 
@@ -515,51 +518,46 @@ def fetch_question(q_num, recent_history):
     selected_backup["difficulty_score"] = grade_score
     return selected_backup
 
-# --- Callback Helpers for "Batafsil Izoh" Menu ---
+# --- Callback Helpers for Native Alert Pop-up Menu ---
 def build_explanation_keyboard(q_num: int):
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("📖 Batafsil ma'lumot (Izoh)", callback_data=f"explain_{q_num}")]
+        [InlineKeyboardButton("📖 Izoh (Pop-up)", callback_data=f"explain_{q_num}")]
     ])
 
 async def callback_explain(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Triggers Telegram's native modal dialog box (show_alert=True) directly on user's screen."""
     query = update.callback_query
-    await query.answer("Batafsil ma'lumot yuklanmoqda...")
-
     data = query.data
     if not data or not data.startswith("explain_"):
+        await query.answer()
         return
 
     try:
         q_num = int(data.split("_")[1])
     except ValueError:
+        await query.answer("Xatolik yuz berdi.", show_alert=True)
         return
 
     info = EXPLANATIONS_CACHE.get(q_num)
     if not info:
-        await query.answer("Kechirasiz, ushbu savol izohi arxivdan o'chirilgan.", show_alert=True)
+        await query.answer("ℹ️ Ushbu savol izohi arxivdan o'chirilgan.", show_alert=True)
         return
 
-    detail_text = (
-        f"📖 #{q_num:07d} — BATAFSIL ILMIY IZOH\n"
-        f"📚 Fan: {info['subject']} ({info['grade']})\n"
-        f"❓ Savol: {info['question']}\n\n"
-        f"✅ To‘g‘ri javob: {info['correct_letter']}) {info['correct_text']}\n\n"
-        f"💡 Kengaytirilgan ma'lumot:\n"
-        f"{info['detailed_explanation']}"
-    )
+    # Telegram show_alert text has a strict limit of 200 characters max
+    raw_text = (
+        info.get("popup_explanation")
+        or info.get("explanation")
+        or ""
+    ).strip()
 
-    close_btn = InlineKeyboardMarkup([
-        [InlineKeyboardButton("❌ Yopish", callback_data="close_explanation")]
-    ])
-    await query.message.reply_text(detail_text, reply_markup=close_btn)
+    # Safety clamp: never exceed Telegram's 200-character ceiling
+    if len(raw_text) > 195:
+        alert_text = raw_text[:192] + "..."
+    else:
+        alert_text = raw_text
 
-async def callback_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    query = update.callback_query
-    await query.answer()
-    try:
-        await query.message.delete()
-    except Exception as e:
-        logger.warning(f"Could not delete explanation message: {e}")
+    # Native modal dialog with OK button - visible ONLY to the clicker!
+    await query.answer(text=alert_text, show_alert=True)
 
 # --- Intake Window Evaluator ---
 async def evaluate_initial_window(app, target_q_num: int):
@@ -617,7 +615,7 @@ async def evaluate_initial_window(app, target_q_num: int):
         reply = (
             f"⏰ DASTLABKI VAQT TUGADI!\n\n"
             f"🎯 TO‘G‘RI JAVOB: {correct_choice}) {ans_text}\n"
-            f"💡 Qisqa izoh: {round_state['explanation']}\n\n"
+            f"💡 Izoh: {round_state['explanation']}\n\n"
             f"⚡ G‘OLIBLAR VA BALLAR:\n"
             f"{winners_block}{extra_note}\n\n"
             f"📊 TOP-10 REYTINQ:\n"
@@ -665,7 +663,7 @@ async def post_hourly_question(app):
                 f"⏰ VAQT TUGADI! (#{prev_q_num:07d})\n\n"
                 f"Hech kim to‘g‘ri javob bera olmadi.\n"
                 f"✅ To‘g‘ri javob: {prev_correct}) {prev_ans}\n"
-                f"💡 Qisqa izoh: {prev_expl}\n\n"
+                f"💡 Izoh: {prev_expl}\n\n"
                 f"⚡ Keyingi savol chiqmoqda..."
             )
             await app.bot.send_message(
@@ -688,22 +686,22 @@ async def post_hourly_question(app):
     round_state["correct"] = data["correct"].upper()
     round_state["options"] = data["options"]
     round_state["explanation"] = data["explanation"]
-    round_state["detailed_explanation"] = data.get("detailed_explanation", data["explanation"])
+    round_state["popup_explanation"] = data.get("popup_explanation", data["explanation"])
     round_state["question_text"] = data["question"]
     round_state["attempted_users"].clear()
     round_state["first_10s_answers"].clear()
     round_state["answered_names"].clear()
     round_state["in_initial_window"] = True
     
-    # Store in explanation cache
+    # Cache for pop-up alert
     EXPLANATIONS_CACHE[q_num] = {
         "subject": data.get("subject", "Umumiy"),
         "grade": data.get("grade", "5-sinf"),
         "question": data.get("question", ""),
         "correct_letter": round_state["correct"],
         "correct_text": round_state["options"].get(round_state["correct"], ""),
-        "short_explanation": data.get("explanation", ""),
-        "detailed_explanation": round_state["detailed_explanation"]
+        "explanation": data.get("explanation", ""),
+        "popup_explanation": round_state["popup_explanation"]
     }
     if len(EXPLANATIONS_CACHE) > 50:
         oldest = min(EXPLANATIONS_CACHE.keys())
@@ -729,7 +727,6 @@ async def post_hourly_question(app):
     round_state["message_id"] = sent_msg.message_id
     logger.info(f"Question #{q_num} ({grade_label}) posted. Correct: {round_state['correct']}")
 
-    # Start the intake window timer strictly after Telegram message is delivered
     asyncio.create_task(evaluate_initial_window(app, q_num))
 
 # --- Message Handler ---
@@ -761,7 +758,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.message.from_user
 
-    # Delete the user's answer immediately to eliminate chat spam & prevent copying
+    # Delete answer message immediately to prevent chat spam and copying
     try:
         await update.message.delete()
     except Exception as e:
@@ -776,7 +773,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_name = user.first_name or "O‘yinchi"
     round_state["answered_names"].append(user_name)
 
-    # Live-edit the question message to show the updated list of respondents
+    # Live-edit the question message to show the list of respondents
     if round_state["message_id"]:
         answered_lines = "\n".join([f"• {name}" for name in round_state["answered_names"]])
         updated_text = (
@@ -796,7 +793,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_choice = match.group(1)
     choice = CYRILLIC_TO_LATIN.get(raw_choice, raw_choice).upper()
 
-    # PHASE 1: Collect guesses silently during the initial window
+    # PHASE 1: Collect guesses silently during initial intake window
     if round_state["in_initial_window"]:
         round_state["first_10s_answers"].append({
             "user": user,
@@ -830,7 +827,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🎯 TO‘G‘RI JAVOB!\n\n"
                 f"⚡ G‘olib: {winner_name} (+10 ball!)\n"
                 f"✅ Javob: {correct_letter}) {ans_text}\n"
-                f"💡 Qisqa izoh: {round_state['explanation']}\n\n"
+                f"💡 Izoh: {round_state['explanation']}\n\n"
                 f"📊 TOP-10 REYTINQ:\n"
                 f"{leaderboard_str}\n\n"
                 f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
@@ -907,7 +904,7 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = (
         f"⏭ SAVOL O'TKAZIB YUBORILDI (Admin tomonidan)\n\n"
         f"✅ To‘g‘ri javob: {correct_letter}) {ans_text}\n"
-        f"💡 Qisqa izoh: {explanation}\n\n"
+        f"💡 Izoh: {explanation}\n\n"
         f"⏳ Keyingi savol 5 daqiqadan so‘ng yoki /test orqali chiqadi."
     )
     await update.message.reply_text(
@@ -1008,7 +1005,6 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("status", cmd_status))
     app.add_handler(CallbackQueryHandler(callback_explain, pattern=r"^explain_\d+$"))
-    app.add_handler(CallbackQueryHandler(callback_close, pattern=r"^close_explanation$"))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
     app.run_polling()
