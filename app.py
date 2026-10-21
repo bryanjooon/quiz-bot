@@ -10,11 +10,12 @@ from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 import pytz
 import requests
-from telegram import Update
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
 from telegram.ext import (
     ApplicationBuilder,
     MessageHandler,
     CommandHandler,
+    CallbackQueryHandler,
     filters,
     ContextTypes
 )
@@ -41,6 +42,12 @@ CYRILLIC_TO_LATIN = {
     'С': 'C', 'с': 'C',
     'D': 'D', 'd': 'D', 'Д': 'D', 'д': 'D'
 }
+
+# Intake window: 15s server-side gives players an actual 10-12s on their screens
+INITIAL_WINDOW_SECONDS = 15
+
+# Cache for detailed explanations: {q_num: {...}}
+EXPLANATIONS_CACHE = {}
 
 # --- Vulgarity, Harassment & Profanity Filter ---
 VULGAR_PATTERNS = [
@@ -207,6 +214,7 @@ round_state = {
     "correct": None,
     "options": {},
     "explanation": "",
+    "detailed_explanation": "",
     "question_text": "",
     "attempted_users": set(),
     "in_initial_window": False,
@@ -356,63 +364,55 @@ def get_grade_info(q_num: int):
         score = "10/10"
     return label, score
 
-# --- Diverse Offline Fallback Pool (Prevents Loops) ---
+# --- Diverse Offline Fallback Pool (With Rich Explanations) ---
 OFFLINE_BACKUP_QUESTIONS = [
     {
         "subject": "Astronomiya",
         "question": "Quyosh sistemasidagi eng katta sayyora qaysi?",
         "options": {"A": "Yupiter", "B": "Saturn", "C": "Mars", "D": "Venera"},
         "correct": "A",
-        "explanation": "Yupiter Quyosh tizimidagi eng ulkan gigant gaz sayyorasidir."
+        "explanation": "Yupiter Quyosh tizimidagi eng ulkan gigant gaz sayyorasidir.",
+        "detailed_explanation": "Yupiter sayyorasi shu qadar ulkanki, uning ichiga Quyosh tizimidagi barcha boshqa sayyoralarni bemalol joylashtirish mumkin. U asosan vodorod va geliydan iborat. Mashhur 'Katta Qizil Dog'' esa Yupiterda kamida 300 yildan beri to'xtamayotgan ulkan gigant bo'rondir."
     },
     {
         "subject": "Biologiya",
         "question": "O'simliklar quyosh nuri yordamida oziq modda ishlab chiqarish jarayoni nima deyiladi?",
         "options": {"A": "Fotosintez", "B": "Nafas olish", "C": "Transpiratsiya", "D": "Diffuziya"},
         "correct": "A",
-        "explanation": "Fotosintez jarayonida xlorofill yorug'lik energiyasini kimyoviy energiyaga aylantiradi."
+        "explanation": "Fotosintez jarayonida xlorofill yorug'lik energiyasini kimyoviy energiyaga aylantiradi.",
+        "detailed_explanation": "Fotosintez — yer yuzidagi hayotning asosiy poydevori. Yashil o'simliklar barglaridagi xloroplastlar quyosh nuri, suv va karbonat angidriddan foydalanib glyukoza (shakar) va kislorod sintez qiladi. Nafas olayotgan kislorodimizning asosiy qismi aynan o'simliklar va dengiz fitoplanktonlari orqali yaratiladi."
     },
     {
         "subject": "Geografiya",
         "question": "Dunyodagi eng chuqur chuchuk suvli ko'l qaysi?",
         "options": {"A": "Baykal", "B": "Kaspiy", "C": "Viktoriya", "D": "Michigan"},
         "correct": "A",
-        "explanation": "Baykal ko'li dunyodagi eng qadimgi va eng chuqur (1642 metr) chuchuk suv havzasidir."
+        "explanation": "Baykal ko'li dunyodagi eng qadimgi va eng chuqur (1642 metr) chuchuk suv havzasidir.",
+        "detailed_explanation": "Baykal ko'li Sibirning janubida joylashgan bo'lib, uning yoshi 25 million yildan oshiq. U yer yuzidagi barcha erigan chuchuk suvning salkam 20 foizini o'zida saqlaydi. Ko'l suvi shunchalik toza va shaffofki, 40 metr chuqurlikdagi toshlarni ham bemalol ko'rish mumkin."
     },
     {
         "subject": "O'zbekiston tarixi",
         "question": "Buyuk ipak yo'lining markazida joylashgan qadimiy 'Afrosiyob' shaharchasi qaysi shahar hududida?",
         "options": {"A": "Samarqand", "B": "Buxoro", "C": "Xiva", "D": "Termiz"},
         "correct": "A",
-        "explanation": "Afrosiyob qadimiy Samarqandning 13-asrgacha bo'lgan dastlabki o'rni hisoblanadi."
+        "explanation": "Afrosiyob qadimiy Samarqandning 13-asrgacha bo'lgan dastlabki o'rni hisoblanadi.",
+        "detailed_explanation": "Afrosiyob tepaliklari qadimiy So'g'diyona poytaxti Samarqandning asl o'rnidir. 1220-yilda Chingizxon qo'shinlari shaharni vayron qilgunga qadar shahar aholisi aynan shu tepalikda yashagan. U yerdan topilgan 'Elchilar zali' devoriy suratlari 7-asr O'rta Osiyo diplomatiyasi va madaniyatining nodir yodgorligidir."
     },
     {
         "subject": "Fizika",
         "question": "Oddiy atmosfera bosimida toza suv necha daraja Selsiyda qaynaydi?",
         "options": {"A": "100°C", "B": "90°C", "C": "80°C", "D": "120°C"},
         "correct": "A",
-        "explanation": "Dengiz sathidagi normal atmosfera bosimida toza suv 100°C da qaynaydi."
+        "explanation": "Dengiz sathidagi normal atmosfera bosimida toza suv 100°C da qaynaydi.",
+        "detailed_explanation": "Qaynash nuqtasi atmosfera bosimiga bevosita bog'liq. Dengiz sathida bosim 1 atmosfera bo'lgani sababli suv 100°C da qaynaydi. Ammo baland tog'larda (masalan, Everest cho'qqisida) havo bosimi pastligi sababli suv bor-yo'g'i 70°C atrofida qaynashni boshlaydi."
     },
     {
         "subject": "Islom tarixi",
         "question": "Payg'ambarimiz Muhammad (s.a.v.) qaysi shaharda tavallud topganlar?",
         "options": {"A": "Makka", "B": "Madina", "C": "Toif", "D": "Quddus"},
         "correct": "A",
-        "explanation": "Payg'ambarimiz (s.a.v.) milodiy 571-yilda Makka shahrida tavallud topganlar."
-    },
-    {
-        "subject": "Inson biologiyasi",
-        "question": "Inson tanasidagi eng katta ichki a'zo qaysi?",
-        "options": {"A": "Jigar", "B": "Yurak", "C": "O'pka", "D": "Buyrak"},
-        "correct": "A",
-        "explanation": "Jigar inson organizmidagi eng yirik va muhim ichki bez hisoblanadi."
-    },
-    {
-        "subject": "Jahon tarixi",
-        "question": "Qadimgi Misr ehromlarining eng mashhuri bo'lgan Xeops ehromi qaysi shahar yaqinida joylashgan?",
-        "options": {"A": "Giza", "B": "Qohira", "C": "Iskandariya", "D": "Luksor"},
-        "correct": "A",
-        "explanation": "Buyuk Xeops ehromi Qohira yaqinidagi Giza platosida qad rostlagan."
+        "explanation": "Payg'ambarimiz (s.a.v.) milodiy 571-yilda Makka shahrida tavallud topganlar.",
+        "detailed_explanation": "Payg'ambarimiz Muhammad (s.a.v.) milodiy 571-yil Fil yilida Makka shahrida, Quraysh qabilasining Hoshimiylar xonadonida dunyoga kelganlar. U zot 40 yoshlarida Makka yaqinidagi Hiro g'orida ilk vahiy qabul qilib, Islom da'vatini aynan Makka zaminida boshlaganlar."
     }
 ]
 
@@ -430,24 +430,24 @@ def fetch_question(q_num, recent_history):
     history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "Hozircha yo'q"
 
     prompt = f"""
-    Sen Telegram viktorinasi uchun SAVOL TUZUVCHI pedagog va mutaxassissan.
+    Sen Telegram viktorinasi uchun ORIGINAL va TAKRORLANMAS savol tuzuvchisan.
     Hozirgi savol raqami: #{q_num} / 1 000 000.
     Unikal kalit: {cache_buster}.
     
-    QAT'IY BOSQICH VA DARAJA TALABI:
+    QAT'IY DARAJA TALABI:
     - Hozirgi daraja: **{grade_label}** darajasi ({grade_score}).
-    - Savol murakkabligi, tili, variantlari va mantiqi aynan **{grade_label}** o'quvchisi qiynalmasdan tushunadigan soddalikda bo'lsin.
-    - O'ta qiyin ilmiy terminlar, chalkash tafsilotlar yoki akademik ensiklopediya savollarini BERMA!
-    - Agar mavzu maktab dasturida bo'lmasa ham (masalan, Kosmonavtika, Kriptografiya yoki Islom tarixi), uni aynan {grade_label} o'quvchisining dunyoqarashiga moslab, sodda va qiziqarli qilib tuz.
+    - Savol murakkabligi va tili aynan **{grade_label}** o'quvchisi qiynalmasdan tushunadigan soddalikda bo'lsin.
+    - O'ta qiyin akademik terminlar yoki chalkash formulalarni BERMA!
+    - Agar mavzu maktab dasturida bo'lmasa ham, uni {grade_label} darajasiga moslab sodda va qiziqarli tuz.
 
     MAVZU: {chosen_topic}
     USLUB: {chosen_angle}
     
-    QO'SHIMCHA TAQIQLAR:
+    QAT'IY TAQIQLAR:
     1. LINGVISTIK VA SO'Z KELIB CHIQISHI TAQIQLANADI ('qaysi tildan olingan', 'ma'nosi nima' kabi savollar bo'lmasin).
     2. SO'NGGI SAVOLLAR TAKRORLANMASIN:
     {history_block}
-    3. Agar mavzu Islom dini yoki tarixiga oid bo'lsa, savol faqat ishonchli (sahih) manbalar asosida, hurmat bilan va nozik ixtilofli masalalarga kirmasdan tuzilsin.
+    3. Agar mavzu Islom dini yoki tarixiga oid bo'lsa, savol faqat sahih manbalar asosida, hurmat bilan tuzilsin.
     4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
     
     Faqat toza JSON formatida javob ber:
@@ -458,7 +458,8 @@ def fetch_question(q_num, recent_history):
         "question": "Savol matni o'zbek tilida",
         "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
         "correct": "A",
-        "explanation": "Qisqa tushuntirish (1-2 gap)"
+        "explanation": "Qisqa tushuntirish (1-2 gap)",
+        "detailed_explanation": "Kengaytirilgan, qiziqarli va chuqurroq ilmiy/tarixiy tushuntirish (mavzuning kelib chiqishi, qiziq faktlar va sabab-oqibatlari bilan 2-3 xatboshi, sodda tilda)"
     }}
     """
 
@@ -477,7 +478,7 @@ def fetch_question(q_num, recent_history):
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": "Sen faqat yaroqli JSON qaytaruvchi yordamchisan."},
+                {"role": "system", "content": "Sen faqat to'g'ri JSON qaytaruvchi yordamchisan."},
                 {"role": "user", "content": prompt}
             ],
             "response_format": {"type": "json_object"},
@@ -496,6 +497,8 @@ def fetch_question(q_num, recent_history):
             if "question" in parsed and "options" in parsed and "correct" in parsed:
                 parsed["grade"] = grade_label
                 parsed["difficulty_score"] = grade_score
+                if "detailed_explanation" not in parsed or not parsed["detailed_explanation"]:
+                    parsed["detailed_explanation"] = parsed.get("explanation", "")
                 logger.info(f"Groq generated successfully using {model}: {parsed['question'][:40]}...")
                 return parsed
 
@@ -512,10 +515,56 @@ def fetch_question(q_num, recent_history):
     selected_backup["difficulty_score"] = grade_score
     return selected_backup
 
-# --- 10-Second Intake Evaluator (Tiered Scoring) ---
+# --- Callback Helpers for "Batafsil Izoh" Menu ---
+def build_explanation_keyboard(q_num: int):
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("📖 Batafsil ma'lumot (Izoh)", callback_data=f"explain_{q_num}")]
+    ])
+
+async def callback_explain(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer("Batafsil ma'lumot yuklanmoqda...")
+
+    data = query.data
+    if not data or not data.startswith("explain_"):
+        return
+
+    try:
+        q_num = int(data.split("_")[1])
+    except ValueError:
+        return
+
+    info = EXPLANATIONS_CACHE.get(q_num)
+    if not info:
+        await query.answer("Kechirasiz, ushbu savol izohi arxivdan o'chirilgan.", show_alert=True)
+        return
+
+    detail_text = (
+        f"📖 #{q_num:07d} — BATAFSIL ILMIY IZOH\n"
+        f"📚 Fan: {info['subject']} ({info['grade']})\n"
+        f"❓ Savol: {info['question']}\n\n"
+        f"✅ To‘g‘ri javob: {info['correct_letter']}) {info['correct_text']}\n\n"
+        f"💡 Kengaytirilgan ma'lumot:\n"
+        f"{info['detailed_explanation']}"
+    )
+
+    close_btn = InlineKeyboardMarkup([
+        [InlineKeyboardButton("❌ Yopish", callback_data="close_explanation")]
+    ])
+    await query.message.reply_text(detail_text, reply_markup=close_btn)
+
+async def callback_close(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    query = update.callback_query
+    await query.answer()
+    try:
+        await query.message.delete()
+    except Exception as e:
+        logger.warning(f"Could not delete explanation message: {e}")
+
+# --- Intake Window Evaluator ---
 async def evaluate_initial_window(app, target_q_num: int):
-    """Waits 10 seconds, then awards points (10, 5, 3) to the fastest correct guesses."""
-    await asyncio.sleep(10)
+    """Waits full calibrated duration, then awards points (10, 5, 3) to the fastest correct guesses."""
+    await asyncio.sleep(INITIAL_WINDOW_SECONDS)
     global round_state
 
     if not round_state["active"] or round_state["q_num"] != target_q_num:
@@ -566,21 +615,25 @@ async def evaluate_initial_window(app, target_q_num: int):
         extra_note = f"\n👏 Yana {extra_correct} kishi to‘g‘ri topdi, ammo shohsupaga ulgurmadi!" if extra_correct > 0 else ""
 
         reply = (
-            f"⏰ 10 SONIYA TUGADI!\n\n"
+            f"⏰ DASTLABKI VAQT TUGADI!\n\n"
             f"🎯 TO‘G‘RI JAVOB: {correct_choice}) {ans_text}\n"
-            f"💡 Izoh: {round_state['explanation']}\n\n"
+            f"💡 Qisqa izoh: {round_state['explanation']}\n\n"
             f"⚡ G‘OLIBLAR VA BALLAR:\n"
             f"{winners_block}{extra_note}\n\n"
             f"📊 TOP-10 REYTINQ:\n"
             f"{leaderboard_str}\n\n"
             f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
         )
-        await app.bot.send_message(GROUP_CHAT_ID, reply)
+        await app.bot.send_message(
+            GROUP_CHAT_ID, 
+            reply, 
+            reply_markup=build_explanation_keyboard(target_q_num)
+        )
     else:
         if answers:
             await app.bot.send_message(
                 GROUP_CHAT_ID,
-                "⏳ 10 soniya o‘tdi, ammo to‘g‘ri javob berilmadi!\n"
+                "⏳ Dastlabki vaqt o‘tdi, ammo to‘g‘ri javob berilmadi!\n"
                 "🔥 O‘yin davom etadi — endi kim birinchi to‘g‘ri topsa, to‘liq 10 ball oladi!"
             )
 
@@ -612,10 +665,14 @@ async def post_hourly_question(app):
                 f"⏰ VAQT TUGADI! (#{prev_q_num:07d})\n\n"
                 f"Hech kim to‘g‘ri javob bera olmadi.\n"
                 f"✅ To‘g‘ri javob: {prev_correct}) {prev_ans}\n"
-                f"💡 Izoh: {prev_expl}\n\n"
+                f"💡 Qisqa izoh: {prev_expl}\n\n"
                 f"⚡ Keyingi savol chiqmoqda..."
             )
-            await app.bot.send_message(GROUP_CHAT_ID, timeout_msg)
+            await app.bot.send_message(
+                GROUP_CHAT_ID, 
+                timeout_msg, 
+                reply_markup=build_explanation_keyboard(prev_q_num)
+            )
             await asyncio.sleep(2)
         except Exception as e:
             logger.error(f"Error expiring unanswered question: {e}", exc_info=True)
@@ -631,11 +688,26 @@ async def post_hourly_question(app):
     round_state["correct"] = data["correct"].upper()
     round_state["options"] = data["options"]
     round_state["explanation"] = data["explanation"]
+    round_state["detailed_explanation"] = data.get("detailed_explanation", data["explanation"])
     round_state["question_text"] = data["question"]
     round_state["attempted_users"].clear()
     round_state["first_10s_answers"].clear()
     round_state["answered_names"].clear()
     round_state["in_initial_window"] = True
+    
+    # Store in explanation cache
+    EXPLANATIONS_CACHE[q_num] = {
+        "subject": data.get("subject", "Umumiy"),
+        "grade": data.get("grade", "5-sinf"),
+        "question": data.get("question", ""),
+        "correct_letter": round_state["correct"],
+        "correct_text": round_state["options"].get(round_state["correct"], ""),
+        "short_explanation": data.get("explanation", ""),
+        "detailed_explanation": round_state["detailed_explanation"]
+    }
+    if len(EXPLANATIONS_CACHE) > 50:
+        oldest = min(EXPLANATIONS_CACHE.keys())
+        del EXPLANATIONS_CACHE[oldest]
     
     grade_label = data.get("grade", "5-sinf")
     diff_score = data.get("difficulty_score", "1/10")
@@ -649,7 +721,7 @@ async def post_hourly_question(app):
         f"C) {data['options']['C']}\n"
         f"D) {data['options']['D']}\n\n"
         f"⚡ Variantni yozing (A, B, C yoki D)!\n"
-        f"⏳ Dastlabki 10 soniya ichida eng tez topgan 3 kishi ball oladi (🥇10, 🥈5, 🥉3)!\n"
+        f"⏳ Dastlabki vaqt ichida eng tez topgan 3 kishi ball oladi (🥇10, 🥈5, 🥉3)!\n"
         f"🤫 Javobingiz bot tomonidan o‘chirilib, quyidagi ro‘yxatga kiritiladi."
     )
     round_state["base_text"] = msg_text
@@ -657,6 +729,7 @@ async def post_hourly_question(app):
     round_state["message_id"] = sent_msg.message_id
     logger.info(f"Question #{q_num} ({grade_label}) posted. Correct: {round_state['correct']}")
 
+    # Start the intake window timer strictly after Telegram message is delivered
     asyncio.create_task(evaluate_initial_window(app, q_num))
 
 # --- Message Handler ---
@@ -723,7 +796,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_choice = match.group(1)
     choice = CYRILLIC_TO_LATIN.get(raw_choice, raw_choice).upper()
 
-    # PHASE 1: Collect guesses silently during the first 10 seconds
+    # PHASE 1: Collect guesses silently during the initial window
     if round_state["in_initial_window"]:
         round_state["first_10s_answers"].append({
             "user": user,
@@ -732,19 +805,20 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
         })
         return
 
-    # PHASE 2: After the 10-second mark (Sudden-Death)
+    # PHASE 2: After the intake window has closed (Sudden-Death)
     try:
         if choice == round_state["correct"]:
             round_state["active"] = False
             winner_name = user_name
+            q_num = round_state["q_num"]
             
             pin = await get_or_create_leaderboard(context.bot)
-            q_num, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
+            curr_q, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
             scores[winner_name] = scores.get(winner_name, 0) + 10
             
             leaderboard_str = await update_pin(
                 context.bot,
-                next_q_num=q_num + 1,
+                next_q_num=curr_q + 1,
                 scores_dict=scores,
                 new_question_summary=round_state["question_text"]
             )
@@ -756,12 +830,16 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"🎯 TO‘G‘RI JAVOB!\n\n"
                 f"⚡ G‘olib: {winner_name} (+10 ball!)\n"
                 f"✅ Javob: {correct_letter}) {ans_text}\n"
-                f"💡 Izoh: {round_state['explanation']}\n\n"
+                f"💡 Qisqa izoh: {round_state['explanation']}\n\n"
                 f"📊 TOP-10 REYTINQ:\n"
                 f"{leaderboard_str}\n\n"
                 f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
             )
-            await context.bot.send_message(GROUP_CHAT_ID, reply)
+            await context.bot.send_message(
+                GROUP_CHAT_ID, 
+                reply, 
+                reply_markup=build_explanation_keyboard(q_num)
+            )
     except Exception as e:
         logger.error(f"Error handling sudden death answer: {e}", exc_info=True)
 
@@ -810,17 +888,18 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     round_state["active"] = False
+    q_num = round_state["q_num"]
     correct_letter = round_state["correct"]
     ans_text = round_state["options"].get(correct_letter, "")
     explanation = round_state["explanation"]
     q_text = round_state["question_text"]
     
     pin = await get_or_create_leaderboard(context.bot)
-    q_num, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
+    curr_q, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
     
     await update_pin(
         context.bot,
-        next_q_num=q_num + 1,
+        next_q_num=curr_q + 1,
         scores_dict=scores,
         new_question_summary=q_text
     )
@@ -828,10 +907,13 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     reply = (
         f"⏭ SAVOL O'TKAZIB YUBORILDI (Admin tomonidan)\n\n"
         f"✅ To‘g‘ri javob: {correct_letter}) {ans_text}\n"
-        f"💡 Izoh: {explanation}\n\n"
+        f"💡 Qisqa izoh: {explanation}\n\n"
         f"⏳ Keyingi savol 5 daqiqadan so‘ng yoki /test orqali chiqadi."
     )
-    await update.message.reply_text(reply)
+    await update.message.reply_text(
+        reply, 
+        reply_markup=build_explanation_keyboard(q_num)
+    )
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
@@ -925,6 +1007,8 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("skip", cmd_skip))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CallbackQueryHandler(callback_explain, pattern=r"^explain_\d+$"))
+    app.add_handler(CallbackQueryHandler(callback_close, pattern=r"^close_explanation$"))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
     app.run_polling()
