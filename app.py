@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 # --- Environment Configuration ---
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GROQ_API_KEY = os.getenv("GROQ_API_KEY")
-GROUP_CHAT_ID = int(os.getenv("TELEGRAM_GROUP_ID"))
+GROUP_CHAT_ID = int(os.getenv("TELEGRAM_GROUP_ID", "0"))
 PORT = int(os.environ.get("PORT", 10000))
 TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
 
@@ -154,7 +154,7 @@ def is_vulgar(text: str) -> bool:
         return True
     return False
 
-# Strict single-letter match
+# Strict single-letter answer match
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
 TOPIC_POOLS = [
@@ -331,28 +331,17 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         logger.error(f"Failed to update pin: {e}")
         return ""
 
-# --- Dynamic Groq Model Selector ---
-PREFERRED_MODELS = [
-    "openai/gpt-oss-20b",
-    "openai/gpt-oss-120b",
-    "qwen/qwen3.8-27b"
-]
+# --- JSON Cleaning & Grade Level Calculator ---
+def clean_json_response(raw_text: str) -> dict:
+    """Safely extracts JSON even if the model wraps it in markdown or comments."""
+    cleaned = raw_text.strip()
+    cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"```$", "", cleaned).strip()
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
+        cleaned = match.group(0)
+    return json.loads(cleaned)
 
-def get_working_groq_model():
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
-    try:
-        res = requests.get("https://api.groq.com/openai/v1/models", headers=headers, timeout=8)
-        data = res.json()
-        if "data" in data:
-            all_ids = [m["id"] for m in data["data"]]
-            for model_id in PREFERRED_MODELS:
-                if model_id in all_ids:
-                    return model_id
-    except Exception as e:
-        logger.error(f"Failed to inspect Groq model list: {e}")
-    return "openai/gpt-oss-20b"
-
-# --- Grade Progression Helper ---
 def get_grade_info(q_num: int):
     """Calculates school grade level based on 1,000 questions per tier."""
     grade_num = 5 + ((q_num - 1) // 1000)
@@ -366,6 +355,66 @@ def get_grade_info(q_num: int):
         label = "Akademik / Ekspert"
         score = "10/10"
     return label, score
+
+# --- Diverse Offline Fallback Pool (Prevents Loops) ---
+OFFLINE_BACKUP_QUESTIONS = [
+    {
+        "subject": "Astronomiya",
+        "question": "Quyosh sistemasidagi eng katta sayyora qaysi?",
+        "options": {"A": "Yupiter", "B": "Saturn", "C": "Mars", "D": "Venera"},
+        "correct": "A",
+        "explanation": "Yupiter Quyosh tizimidagi eng ulkan gigant gaz sayyorasidir."
+    },
+    {
+        "subject": "Biologiya",
+        "question": "O'simliklar quyosh nuri yordamida oziq modda ishlab chiqarish jarayoni nima deyiladi?",
+        "options": {"A": "Fotosintez", "B": "Nafas olish", "C": "Transpiratsiya", "D": "Diffuziya"},
+        "correct": "A",
+        "explanation": "Fotosintez jarayonida xlorofill yorug'lik energiyasini kimyoviy energiyaga aylantiradi."
+    },
+    {
+        "subject": "Geografiya",
+        "question": "Dunyodagi eng chuqur chuchuk suvli ko'l qaysi?",
+        "options": {"A": "Baykal", "B": "Kaspiy", "C": "Viktoriya", "D": "Michigan"},
+        "correct": "A",
+        "explanation": "Baykal ko'li dunyodagi eng qadimgi va eng chuqur (1642 metr) chuchuk suv havzasidir."
+    },
+    {
+        "subject": "O'zbekiston tarixi",
+        "question": "Buyuk ipak yo'lining markazida joylashgan qadimiy 'Afrosiyob' shaharchasi qaysi shahar hududida?",
+        "options": {"A": "Samarqand", "B": "Buxoro", "C": "Xiva", "D": "Termiz"},
+        "correct": "A",
+        "explanation": "Afrosiyob qadimiy Samarqandning 13-asrgacha bo'lgan dastlabki o'rni hisoblanadi."
+    },
+    {
+        "subject": "Fizika",
+        "question": "Oddiy atmosfera bosimida toza suv necha daraja Selsiyda qaynaydi?",
+        "options": {"A": "100°C", "B": "90°C", "C": "80°C", "D": "120°C"},
+        "correct": "A",
+        "explanation": "Dengiz sathidagi normal atmosfera bosimida toza suv 100°C da qaynaydi."
+    },
+    {
+        "subject": "Islom tarixi",
+        "question": "Payg'ambarimiz Muhammad (s.a.v.) qaysi shaharda tavallud topganlar?",
+        "options": {"A": "Makka", "B": "Madina", "C": "Toif", "D": "Quddus"},
+        "correct": "A",
+        "explanation": "Payg'ambarimiz (s.a.v.) milodiy 571-yilda Makka shahrida tavallud topganlar."
+    },
+    {
+        "subject": "Inson biologiyasi",
+        "question": "Inson tanasidagi eng katta ichki a'zo qaysi?",
+        "options": {"A": "Jigar", "B": "Yurak", "C": "O'pka", "D": "Buyrak"},
+        "correct": "A",
+        "explanation": "Jigar inson organizmidagi eng yirik va muhim ichki bez hisoblanadi."
+    },
+    {
+        "subject": "Jahon tarixi",
+        "question": "Qadimgi Misr ehromlarining eng mashhuri bo'lgan Xeops ehromi qaysi shahar yaqinida joylashgan?",
+        "options": {"A": "Giza", "B": "Qohira", "C": "Iskandariya", "D": "Luksor"},
+        "correct": "A",
+        "explanation": "Buyuk Xeops ehromi Qohira yaqinidagi Giza platosida qad rostlagan."
+    }
+]
 
 # --- Question Generator ---
 def fetch_question(q_num, recent_history):
@@ -395,14 +444,13 @@ def fetch_question(q_num, recent_history):
     USLUB: {chosen_angle}
     
     QO'SHIMCHA TAQIQLAR:
-    1. LINGVISTIK VA SO'Z KELIB CHIQISHI TAQIQLANADI:
-       - 'Qaysi tildan olingan?', 'So'zning ma'nosi nima?' kabi etimologik savollarni ASLO berma.
+    1. LINGVISTIK VA SO'Z KELIB CHIQISHI TAQIQLANADI ('qaysi tildan olingan', 'ma'nosi nima' kabi savollar bo'lmasin).
     2. SO'NGGI SAVOLLAR TAKRORLANMASIN:
     {history_block}
     3. Agar mavzu Islom dini yoki tarixiga oid bo'lsa, savol faqat ishonchli (sahih) manbalar asosida, hurmat bilan va nozik ixtilofli masalalarga kirmasdan tuzilsin.
     4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
     
-    Faqat quyidagi JSON formatida javob ber (hech qanday markdown kod blokisiz):
+    Faqat toza JSON formatida javob ber:
     {{
         "subject": "{chosen_topic.split(':')[0].strip()}",
         "grade": "{grade_label}",
@@ -410,48 +458,59 @@ def fetch_question(q_num, recent_history):
         "question": "Savol matni o'zbek tilida",
         "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
         "correct": "A",
-        "explanation": "Qisqa va bolalar ham tushunadigan sodda tushuntirish (1-2 gap)"
+        "explanation": "Qisqa tushuntirish (1-2 gap)"
     }}
     """
-    
-    selected_model = get_working_groq_model()
+
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
         "Content-Type": "application/json"
     }
-    
-    payload = {
-        "model": selected_model,
-        "messages": [
-            {"role": "system", "content": "Faqat to'g'ridan-to'g'ri yaroqli JSON qaytar."},
-            {"role": "user", "content": prompt}
-        ],
-        "response_format": {"type": "json_object"},
-        "temperature": 0.75
-    }
-    
-    try:
-        res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=15)
-        data = res.json()
-        if "error" in data:
-            logger.error(f"Groq API Error: {data['error'].get('message')}")
-            raise ValueError(data['error'].get('message'))
-            
-        raw_text = data['choices'][0]['message']['content'].strip()
-        parsed = json.loads(raw_text)
-        logger.info(f"Groq generated ({grade_label}): {parsed.get('question')[:40]}...")
-        return parsed
-    except Exception as e:
-        logger.error(f"Groq request failed: {e}", exc_info=True)
-        return {
-            "subject": "Tarix",
-            "grade": grade_label,
-            "difficulty_score": grade_score,
-            "question": "Amir Temur davlatining poytaxti qaysi shahar bo'lgan?",
-            "options": {"A": "Samarqand", "B": "Buxoro", "C": "Toshkent", "D": "Xiva"},
-            "correct": "A",
-            "explanation": "Amir Temur Samarqand shahrini o'z saltanatining poytaxti etib belgilagan va uni obod qilgan."
+
+    models_to_try = [
+        "openai/gpt-oss-20b",
+        "openai/gpt-oss-120b",
+        "qwen/qwen3.8-27b"
+    ]
+
+    for model in models_to_try:
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "Sen faqat yaroqli JSON qaytaruvchi yordamchisan."},
+                {"role": "user", "content": prompt}
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.75
         }
+        try:
+            res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=30)
+            data = res.json()
+            if "error" in data:
+                logger.warning(f"Groq {model} error: {data['error'].get('message')}. Retrying next model...")
+                continue
+
+            raw_text = data['choices'][0]['message']['content']
+            parsed = clean_json_response(raw_text)
+            
+            if "question" in parsed and "options" in parsed and "correct" in parsed:
+                parsed["grade"] = grade_label
+                parsed["difficulty_score"] = grade_score
+                logger.info(f"Groq generated successfully using {model}: {parsed['question'][:40]}...")
+                return parsed
+
+        except Exception as e:
+            logger.warning(f"Model {model} failed ({e}). Trying next model...")
+
+    logger.error("All Groq models failed. Deploying diverse offline backup question.")
+    available_backups = [
+        q for q in OFFLINE_BACKUP_QUESTIONS 
+        if not any(q["question"][:30] in h for h in recent_history)
+    ]
+    selected_backup = random.choice(available_backups if available_backups else OFFLINE_BACKUP_QUESTIONS).copy()
+    selected_backup["grade"] = grade_label
+    selected_backup["difficulty_score"] = grade_score
+    return selected_backup
 
 # --- 10-Second Intake Evaluator (Tiered Scoring) ---
 async def evaluate_initial_window(app, target_q_num: int):
