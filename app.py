@@ -126,11 +126,6 @@ VULGAR_PATTERNS = [
     r"gey\w*",
 ]
 
-VULGAR_REGEX = re.compile(
-    r"(?i)\b(" + "|".join(VULGAR_PATTERNS) + r")\b",
-    re.UNICODE
-)
-
 LEET_MAP = str.maketrans({
     '@': 'a',
     '4': 'a',
@@ -141,6 +136,36 @@ LEET_MAP = str.maketrans({
     '3': 'e',
     'x': 'h',
 })
+
+# --- Dynamic Custom Word Blacklist Storage ---
+CUSTOM_BANNED_FILE = "banned_words.json"
+CUSTOM_BANNED_WORDS = set()
+
+def load_custom_banned():
+    global CUSTOM_BANNED_WORDS
+    if os.path.exists(CUSTOM_BANNED_FILE):
+        try:
+            with open(CUSTOM_BANNED_FILE, "r", encoding="utf-8") as f:
+                CUSTOM_BANNED_WORDS = set(json.load(f))
+        except Exception as e:
+            logger.error(f"Error loading custom banned words: {e}")
+
+def save_custom_banned():
+    try:
+        with open(CUSTOM_BANNED_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(CUSTOM_BANNED_WORDS), f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving custom banned words: {e}")
+
+def compile_vulgar_regex():
+    patterns = list(VULGAR_PATTERNS)
+    for word in CUSTOM_BANNED_WORDS:
+        escaped = re.escape(word.strip().lower())
+        patterns.append(rf"{escaped}\w*")
+    return re.compile(r"(?i)\b(" + "|".join(patterns) + r")\b", re.UNICODE)
+
+load_custom_banned()
+VULGAR_REGEX = compile_vulgar_regex()
 
 def is_vulgar(text: str) -> bool:
     """Checks if a message contains profanities, spaced bypasses, or leetspeak."""
@@ -218,36 +243,6 @@ round_state = {
     "base_text": "",
     "answered_names": []
 }
-# --- Dynamic Custom Word Blacklist Storage ---
-CUSTOM_BANNED_FILE = "banned_words.json"
-CUSTOM_BANNED_WORDS = set()
-
-def load_custom_banned():
-    global CUSTOM_BANNED_WORDS
-    if os.path.exists(CUSTOM_BANNED_FILE):
-        try:
-            with open(CUSTOM_BANNED_FILE, "r", encoding="utf-8") as f:
-                CUSTOM_BANNED_WORDS = set(json.load(f))
-        except Exception as e:
-            logger.error(f"Error loading custom banned words: {e}")
-
-def save_custom_banned():
-    try:
-        with open(CUSTOM_BANNED_FILE, "w", encoding="utf-8") as f:
-            json.dump(list(CUSTOM_BANNED_WORDS), f, ensure_ascii=False, indent=2)
-    except Exception as e:
-        logger.error(f"Error saving custom banned words: {e}")
-
-def compile_vulgar_regex():
-    patterns = list(VULGAR_PATTERNS)
-    for word in CUSTOM_BANNED_WORDS:
-        escaped = re.escape(word.strip().lower())
-        patterns.append(rf"{escaped}\w*")
-    return re.compile(r"(?i)\b(" + "|".join(patterns) + r")\b", re.UNICODE)
-
-# Initialize custom banned words and compile master regex
-load_custom_banned()
-VULGAR_REGEX = compile_vulgar_regex()
 
 # --- Keep-Alive Web Server for Render ---
 class HealthHandler(BaseHTTPRequestHandler):
@@ -616,7 +611,7 @@ async def evaluate_initial_window(app, target_q_num: int):
         izoh_formatted = format_izoh_block(round_state['explanation'], round_state['detailed_explanation'])
 
         reply = (
-            f"⏰ <b>DASTLABKI VAQT TUGADI!</b>\n\n"
+            f"⏰ <b>30 SONIYA TUGADI!</b>\n\n"
             f"🎯 <b>TO‘G‘RI JAVOB:</b> {correct_choice}) {escape_tg_html(ans_text)}\n"
             f"{izoh_formatted}\n\n"
             f"⚡ <b>G‘OLIBLAR VA BALLAR:</b>\n"
@@ -634,7 +629,7 @@ async def evaluate_initial_window(app, target_q_num: int):
         if answers:
             await app.bot.send_message(
                 GROUP_CHAT_ID,
-                "⏳ Dastlabki vaqt o‘tdi, ammo to‘g‘ri javob berilmadi!\n"
+                "⏳ 30 soniya o‘tdi, ammo to‘g‘ri javob berilmadi!\n"
                 "🔥 O‘yin davom etadi — endi kim birinchi to‘g‘ri topsa, to‘liq 10 ball oladi!"
             )
 
@@ -710,7 +705,7 @@ async def post_hourly_question(app):
         f"C) {data['options']['C']}\n"
         f"D) {data['options']['D']}\n\n"
         f"⚡ Variantni yozing (A, B, C yoki D)!\n"
-        f"⏳ Dastlabki vaqt ichida eng tez topgan 3 kishi ball oladi (🥇10, 🥈5, 🥉3)!\n"
+        f"⏳ Dastlabki 30 soniya ichida eng tez topgan 3 kishi ball oladi (🥇10, 🥈5, 🥉3)!\n"
         f"🤫 Javobingiz bot tomonidan o‘chirilib, quyidagi ro‘yxatga kiritiladi."
     )
     round_state["base_text"] = msg_text
@@ -957,7 +952,7 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg)
 
-    async def cmd_cuss(update: Update, context: ContextTypes.DEFAULT_TYPE):
+async def cmd_cuss(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Adds a custom word to the permanent ban list and deletes the trigger message."""
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
@@ -968,7 +963,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
-    # Delete admin's message immediately so the vulgar word is not left in chat
     try:
         await update.message.delete()
     except Exception:
@@ -1004,7 +998,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.delete()
     except Exception:
         pass
-
 
 async def cmd_uncuss(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Removes a word from the custom ban list."""
@@ -1051,7 +1044,6 @@ async def cmd_uncuss(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await msg.delete()
     except Exception:
         pass
-
 
 async def cmd_cusslist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Shows all custom-added banned words."""
@@ -1114,7 +1106,7 @@ if __name__ == "__main__":
     threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(on_startup).build()
     
-   app.add_handler(CommandHandler("test", cmd_test))
+    app.add_handler(CommandHandler("test", cmd_test))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("skip", cmd_skip))
     app.add_handler(CommandHandler("reset", cmd_reset))
