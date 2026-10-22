@@ -218,6 +218,36 @@ round_state = {
     "base_text": "",
     "answered_names": []
 }
+# --- Dynamic Custom Word Blacklist Storage ---
+CUSTOM_BANNED_FILE = "banned_words.json"
+CUSTOM_BANNED_WORDS = set()
+
+def load_custom_banned():
+    global CUSTOM_BANNED_WORDS
+    if os.path.exists(CUSTOM_BANNED_FILE):
+        try:
+            with open(CUSTOM_BANNED_FILE, "r", encoding="utf-8") as f:
+                CUSTOM_BANNED_WORDS = set(json.load(f))
+        except Exception as e:
+            logger.error(f"Error loading custom banned words: {e}")
+
+def save_custom_banned():
+    try:
+        with open(CUSTOM_BANNED_FILE, "w", encoding="utf-8") as f:
+            json.dump(list(CUSTOM_BANNED_WORDS), f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving custom banned words: {e}")
+
+def compile_vulgar_regex():
+    patterns = list(VULGAR_PATTERNS)
+    for word in CUSTOM_BANNED_WORDS:
+        escaped = re.escape(word.strip().lower())
+        patterns.append(rf"{escaped}\w*")
+    return re.compile(r"(?i)\b(" + "|".join(patterns) + r")\b", re.UNICODE)
+
+# Initialize custom banned words and compile master regex
+load_custom_banned()
+VULGAR_REGEX = compile_vulgar_regex()
 
 # --- Keep-Alive Web Server for Render ---
 class HealthHandler(BaseHTTPRequestHandler):
@@ -927,6 +957,131 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(msg)
 
+    async def cmd_cuss(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Adds a custom word to the permanent ban list and deletes the trigger message."""
+    if update.effective_chat.id != GROUP_CHAT_ID:
+        return
+    if not await is_admin(update, context):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        return
+
+    # Delete admin's message immediately so the vulgar word is not left in chat
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    if not context.args:
+        warn = await context.bot.send_message(
+            GROUP_CHAT_ID,
+            "⚠️ <b>Foydalanish:</b> <code>/cuss &lt;so'z&gt;</code>\nMasalan: <code>/cuss yiban</code>",
+            parse_mode="HTML"
+        )
+        await asyncio.sleep(5)
+        try:
+            await warn.delete()
+        except Exception:
+            pass
+        return
+
+    new_word = context.args[0].strip().lower()
+    CUSTOM_BANNED_WORDS.add(new_word)
+    save_custom_banned()
+
+    global VULGAR_REGEX
+    VULGAR_REGEX = compile_vulgar_regex()
+
+    msg = await context.bot.send_message(
+        GROUP_CHAT_ID,
+        f"🚫 <b>'{escape_tg_html(new_word)}'</b> so'zi qora ro'yxatga qo'shildi va endi avtomatik o'chiriladi.",
+        parse_mode="HTML"
+    )
+    await asyncio.sleep(6)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+
+async def cmd_uncuss(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Removes a word from the custom ban list."""
+    if update.effective_chat.id != GROUP_CHAT_ID:
+        return
+    if not await is_admin(update, context):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        return
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    if not context.args:
+        warn = await context.bot.send_message(
+            GROUP_CHAT_ID,
+            "⚠️ <b>Foydalanish:</b> <code>/uncuss &lt;so'z&gt;</code>",
+            parse_mode="HTML"
+        )
+        await asyncio.sleep(5)
+        try:
+            await warn.delete()
+        except Exception:
+            pass
+        return
+
+    target_word = context.args[0].strip().lower()
+    if target_word in CUSTOM_BANNED_WORDS:
+        CUSTOM_BANNED_WORDS.remove(target_word)
+        save_custom_banned()
+        global VULGAR_REGEX
+        VULGAR_REGEX = compile_vulgar_regex()
+        text = f"✅ <b>'{escape_tg_html(target_word)}'</b> taqiqdan olib tashlandi."
+    else:
+        text = f"ℹ️ <b>'{escape_tg_html(target_word)}'</b> maxsus taqiqlanganlar ro'yxatida topilmadi."
+
+    msg = await context.bot.send_message(GROUP_CHAT_ID, text, parse_mode="HTML")
+    await asyncio.sleep(6)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+
+async def cmd_cusslist(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Shows all custom-added banned words."""
+    if update.effective_chat.id != GROUP_CHAT_ID:
+        return
+    if not await is_admin(update, context):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        return
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    if not CUSTOM_BANNED_WORDS:
+        msg_text = "📋 Hozircha qo'shimcha kiritilgan so'zlar yo'q (Faqat asosiy filtr faol)."
+    else:
+        words = ", ".join([f"<code>{escape_tg_html(w)}</code>" for w in sorted(CUSTOM_BANNED_WORDS)])
+        msg_text = f"📋 <b>Qo'shilgan taqiqlangan so'zlar ({len(CUSTOM_BANNED_WORDS)} ta):</b>\n\n{words}"
+
+    msg = await context.bot.send_message(GROUP_CHAT_ID, msg_text, parse_mode="HTML")
+    await asyncio.sleep(10)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
 # --- Scheduler Task (5-Minute Drops) ---
 scheduler_task = None
 
@@ -959,11 +1114,14 @@ if __name__ == "__main__":
     threading.Thread(target=run_web_server, daemon=True).start()
     app = ApplicationBuilder().token(BOT_TOKEN).post_init(on_startup).build()
     
-    app.add_handler(CommandHandler("test", cmd_test))
+   app.add_handler(CommandHandler("test", cmd_test))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("skip", cmd_skip))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("cuss", cmd_cuss))
+    app.add_handler(CommandHandler("uncuss", cmd_uncuss))
+    app.add_handler(CommandHandler("cusslist", cmd_cusslist))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
     app.run_polling()
