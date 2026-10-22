@@ -237,9 +237,10 @@ def parse_pin_data(pin_text):
             continue
         
         if not is_history_section:
-            m = re.match(r"^[🥇🥈🥉\d.]+\s*(.+?)\s*—\s*(\d+)\s*ball", line)
+            # Matches any rank format (medals or digits) and extracts full player name + score
+            m = re.match(r"^(?:[🥇🥈🥉]|\d+\.)\s*(.+?)\s*—\s*(\d+)\s*ball", line)
             if m:
-                scores[m.group(1)] = int(m.group(2))
+                scores[m.group(1).strip()] = int(m.group(2))
         else:
             if line.startswith("•") and "boshlanmoqda" not in line:
                 history.append(line.replace("•", "").strip())
@@ -331,11 +332,9 @@ def get_grade_info(q_num: int):
     return label, score
 
 # --- Groq Dynamic Roast Generator ---
-# --- Groq Dynamic Roast Generator ---
 def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses_grouped):
     """
     Sends wrong guesses to Groq to generate dynamic, individual, witty, and educational roasts.
-    wrong_guesses_grouped format: {"B": ["John", "Mark"], "D": ["Wesley"]}
     """
     if not wrong_guesses_grouped:
         return ""
@@ -376,7 +375,6 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
         "Content-Type": "application/json"
     }
 
-    # Try models with a higher timeout window
     models_to_try = [
         "openai/gpt-oss-120b",
         "qwen/qwen3.8-27b"
@@ -403,7 +401,6 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
         except Exception as e:
             logger.warning(f"Roast model {model} failed: {e}")
 
-    # Dynamic non-repetitive fallback pool if Groq API is completely down
     ROAST_TEMPLATES = [
         "🔥 <b>{names}</b> — {letter}) variantini tanladingiz. Bu variant mantiqan to'g'ri javobga mutlaqo zid edi!",
         "🔥 <b>{names}</b> — sizlar {letter}) variantiga ishondingiz-a? Tarix va ilmfan bu tanlovingizdan biroz xafa bo'ldi! 😂",
@@ -886,6 +883,47 @@ async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(reply)
 
+async def cmd_myrank(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Allows any player to check their exact rank and total points."""
+    if update.effective_chat.id != GROUP_CHAT_ID:
+        return
+
+    user = update.effective_user
+    if not user:
+        return
+
+    name = user.first_name or "O‘yinchi"
+    pin = await get_or_create_leaderboard(context.bot)
+    _, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
+
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    
+    player_rank = None
+    player_pts = 0
+
+    for idx, (p_name, pts) in enumerate(sorted_scores, start=1):
+        if p_name.lower() == name.lower():
+            player_rank = idx
+            player_pts = pts
+            break
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    if player_rank:
+        text = f"👤 <b>{escape_tg_html(name)}</b>ning natijasi:\n🏆 Urinish: #{player_rank}-o'rin | ⭐️ Ball: {player_pts} ball"
+    else:
+        text = f"👤 <b>{escape_tg_html(name)}</b>, sizda hali to'plangan ballar yo'q! Birinchi bo'lib to'g'ri javob bering va ochko oling!"
+
+    msg = await context.bot.send_message(GROUP_CHAT_ID, text, parse_mode="HTML")
+    await asyncio.sleep(8)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
 async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global round_state
     if update.effective_chat.id != GROUP_CHAT_ID:
@@ -1136,6 +1174,7 @@ if __name__ == "__main__":
     
     app.add_handler(CommandHandler("test", cmd_test))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
+    app.add_handler(CommandHandler("myrank", cmd_myrank))
     app.add_handler(CommandHandler("skip", cmd_skip))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("status", cmd_status))
