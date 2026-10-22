@@ -653,10 +653,11 @@ async def evaluate_initial_window(app, target_q_num: int):
             )
 
 # --- Round Engine ---
+# --- Round Engine ---
 async def post_hourly_question(app):
     global round_state
 
-    # 1. AUTO-EXPIRE: If previous question was never answered, reveal it and advance q_num
+    # 1. AUTO-EXPIRE: If previous question was never answered after 5 minutes
     if round_state["active"]:
         round_state["active"] = False
         prev_q_num = round_state["q_num"]
@@ -665,6 +666,24 @@ async def post_hourly_question(app):
         prev_expl = round_state["explanation"]
         prev_detailed = round_state["detailed_explanation"]
         prev_q_text = round_state["question_text"]
+
+        # Collect and group any incorrect guesses that were made during the 5 minutes
+        answers = round_state["first_10s_answers"]
+        unique_answers = []
+        seen_ids = set()
+        for ans in answers:
+            if ans["user"].id not in seen_ids:
+                seen_ids.add(ans["user"].id)
+                unique_answers.append(ans)
+
+        wrong_answers = [ans for ans in unique_answers if ans["choice"] != prev_correct]
+        wrong_grouped = {}
+        for ans in wrong_answers:
+            letter = ans["choice"]
+            name = ans["user"].first_name or "O'yinchi"
+            if letter not in wrong_grouped:
+                wrong_grouped[letter] = []
+            wrong_grouped[letter].append(name)
 
         try:
             pin = await get_or_create_leaderboard(app.bot)
@@ -678,11 +697,21 @@ async def post_hourly_question(app):
             )
 
             izoh_formatted = format_izoh_block(prev_expl, prev_detailed)
+            
+            # Generate roast for anyone who guessed wrong before the 5-minute timeout
+            roast_section = generate_dynamic_roast(
+                prev_q_text,
+                round_state["options"],
+                prev_correct,
+                wrong_grouped
+            )
+
             timeout_msg = (
                 f"⏰ <b>VAQT TUGADI!</b> (#{prev_q_num:07d})\n\n"
                 f"Hech kim to‘g‘ri javob bera olmadi.\n"
                 f"✅ <b>To‘g‘ri javob:</b> {prev_correct}) {escape_tg_html(prev_ans)}\n"
-                f"{izoh_formatted}\n\n"
+                f"{izoh_formatted}"
+                f"{roast_section}\n\n"
                 f"⚡ Keyingi savol chiqmoqda..."
             )
             await app.bot.send_message(
