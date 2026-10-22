@@ -42,7 +42,7 @@ CYRILLIC_TO_LATIN = {
     'D': 'D', 'd': 'D', 'Д': 'D', 'д': 'D'
 }
 
-INITIAL_WINDOW_SECONDS = 15
+INITIAL_WINDOW_SECONDS = 30
 
 # --- Vulgarity, Harassment & Profanity Filter ---
 VULGAR_PATTERNS = [
