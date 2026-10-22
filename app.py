@@ -46,98 +46,26 @@ INITIAL_WINDOW_SECONDS = 30
 
 # --- Vulgarity, Harassment & Profanity Filter ---
 VULGAR_PATTERNS = [
-    # English vulgarities, harassment, and violence
-    r"fuck\w*",
-    r"shit\w*",
-    r"bitch\w*",
-    r"asshole\w*",
-    r"bastard\w*",
-    r"cunt\w*",
-    r"dick\w*",
-    r"pussy\w*",
-    r"rape\w*",
-    r"rapis\w*",
-    r"slut\w*",
-    r"whore\w*",
-    # Russian / Slavic profanities and insults (Latin + Cyrillic)
-    r"na[hx]u[iyj]\w*",
-    r"nah\b",
-    r"nax\b",
-    r"нах\b",
-    r"наху[йяеё]\w*",
-    r"поху[йяеё]\w*",
-    r"ху[йяеёи]\w*",
-    r"xuy\w*",
-    r"пизд\w*",
-    r"pizd\w*",
-    r"бля\w*",
-    r"blya\w*",
-    r"еба\w*",
-    r"ёб\w*",
-    r"yob\w*",
-    r"yeb\w*",
-    r"сука\w*",
-    r"сучк\w*",
-    r"suka\w*",
-    r"suchk\w*",
-    r"мудак\w*",
-    r"mudak\w*",
-    r"гандон\w*",
-    r"gandon\w*",
-    r"презерватив\w*",
-    r"лох\w*",
-    r"lox\w*",
-    r"чмо\w*",
-    r"chmo\w*",
-    r"дебил\w*",
-    r"debil\w*",
-    r"далба[её]б\w*",
-    r"dalba[ye]ob\w*",
-    # yban / yeban / eban variants
-    r"y+e*b+a+[nŋ]\w*",
-    r"e+b+a+[nŋ]\w*",
-    r"y+e*b+l+a+[nŋ]\w*",
-    r"e+b+l+a+[nŋ]\w*",
-    r"[её]+б+а+[нң]\w*",
-    r"[её]+б+л+а+[нң]\w*",
-    r"й+е+б+а+[нң]\w*",
-    r"и+б+а+[нң]\w*",
-    r"ы+б+а+[нң]\w*",
-    # Uzbek profanities, slurs, and insults
-    r"jalap\w*",
-    r"jala\b",
-    r"жалап\w*",
-    r"жалаб\w*",
-    r"qanjiq\w*",
-    r"қанжиқ\w*",
-    r"sik\w*",
-    r"сики\w*",
-    r"сик\w*",
-    r"qo[t']oq\w*",
-    r"қотоқ\w*",
-    r"onangni\w*",
-    r"otangni\w*",
-    r"ona[nŋ]g\w*",
-    r"itvachcha\w*",
-    r"padariga\w*",
-    r"iflos\w*",
-    r"xezalak\w*",
-    r"гей\w*",
-    r"gey\w*",
+    r"fuck\w*", r"shit\w*", r"bitch\w*", r"asshole\w*", r"bastard\w*", r"cunt\w*",
+    r"dick\w*", r"pussy\w*", r"rape\w*", r"rapis\w*", r"slut\w*", r"whore\w*",
+    r"na[hx]u[iyj]\w*", r"nah\b", r"nax\b", r"нах\b", r"наху[йяеё]\w*", r"поху[йяеё]\w*",
+    r"ху[йяеёи]\w*", r"xuy\w*", r"пизд\w*", r"pizd\w*", r"бля\w*", r"blya\w*",
+    r"еба\w*", r"ёб\w*", r"yob\w*", r"yeb\w*", r"сука\w*", r"сучк\w*", r"suka\w*",
+    r"suchk\w*", r"мудак\w*", r"mudak\w*", r"гандон\w*", r"gandon\w*", r"презерватив\w*",
+    r"лох\w*", r"lox\w*", r"чмо\w*", r"chmo\w*", r"дебил\w*", r"debil\w*",
+    r"далба[её]б\w*", r"dalba[ye]ob\w*",
+    r"y+e*b+a+[nŋ]\w*", r"e+b+a+[nŋ]\w*", r"y+e*b+l+a+[nŋ]\w*", r"e+b+l+a+[nŋ]\w*",
+    r"[её]+б+а+[нң]\w*", r"[её]+б+л+а+[нң]\w*", r"й+е+б+а+[нң]\w*", r"и+б+а+[нң]\w*", r"ы+б+а+[нң]\w*",
+    r"jalap\w*", r"jala\b", r"жалап\w*", r"жалаб\w*", r"qanjiq\w*", r"қанжиқ\w*",
+    r"sik\w*", r"сики\w*", r"сик\w*", r"qo[t']oq\w*", r"қотоқ\w*", r"onangni\w*",
+    r"otangni\w*", r"ona[nŋ]g\w*", r"itvachcha\w*", r"padariga\w*", r"iflos\w*",
+    r"xezalak\w*", r"гей\w*", r"gey\w*",
 ]
 
 LEET_MAP = str.maketrans({
-    '@': 'a',
-    '4': 'a',
-    '0': 'o',
-    '1': 'i',
-    '!': 'i',
-    '$': 's',
-    '3': 'e',
-    'x': 'h',
+    '@': 'a', '4': 'a', '0': 'o', '1': 'i', '!': 'i', '$': 's', '3': 'e', 'x': 'h',
 })
 
-# --- Dynamic Custom Word Blacklist Storage ---
 CUSTOM_BANNED_FILE = "banned_words.json"
 CUSTOM_BANNED_WORDS = set()
 
@@ -168,7 +96,6 @@ load_custom_banned()
 VULGAR_REGEX = compile_vulgar_regex()
 
 def is_vulgar(text: str) -> bool:
-    """Checks if a message contains profanities, spaced bypasses, or leetspeak."""
     if not text:
         return False
     if VULGAR_REGEX.search(text):
@@ -181,7 +108,6 @@ def is_vulgar(text: str) -> bool:
         return True
     return False
 
-# Strict single-letter answer match
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
 TOPIC_POOLS = [
@@ -359,15 +285,12 @@ async def update_pin(bot, next_q_num, scores_dict, new_question_summary=None):
         logger.error(f"Failed to update pin: {e}")
         return ""
 
-# --- HTML Safe Helper & Expandable Blockquote Formatter ---
 def escape_tg_html(text: str) -> str:
-    """Escapes only HTML reserved characters without altering apostrophes."""
     if not text:
         return ""
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
 def format_izoh_block(explanation: str, detailed: str) -> str:
-    """Renders short explanation followed by an expandable collapsible quote block."""
     clean_expl = escape_tg_html(explanation)
     clean_detail = escape_tg_html(detailed)
     if clean_detail and clean_detail.strip() != clean_expl.strip():
@@ -379,7 +302,6 @@ def format_izoh_block(explanation: str, detailed: str) -> str:
     return f"💡 <b>Izoh:</b> {clean_expl}"
 
 def format_leaderboard_block(leaderboard_str: str) -> str:
-    """Wraps the leaderboard in an expandable collapsible quote block."""
     clean_lb = escape_tg_html(leaderboard_str)
     return (
         f"<blockquote expandable>📊 <b>TOP-10 REYTINQ (ko'rish uchun bosing):</b>\n\n"
@@ -408,6 +330,74 @@ def get_grade_info(q_num: int):
         score = "10/10"
     return label, score
 
+# --- Groq Dynamic Roast Generator ---
+def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses_grouped):
+    """
+    Sends wrong guesses to Groq to generate witty, educational roasts for wrong choices.
+    wrong_guesses_grouped format: {"B": ["John", "Mark"], "D": ["Wesley"]}
+    """
+    if not wrong_guesses_grouped:
+        return ""
+
+    correct_text = options.get(correct_letter, "")
+    
+    # Format incorrect guessers into a string for the prompt
+    wrong_block = []
+    for letter, names in wrong_guesses_grouped.items():
+        opt_text = options.get(letter, "")
+        wrong_block.append(f"- Variant {letter}) '{opt_text}': {', '.join(names)}")
+    
+    wrong_str = "\n".join(wrong_block)
+
+    prompt = f"""
+    Sen Telegram viktorina botisan. O'yinning ushbu raundida ba'zi ishtirokchilar NOTO'G'RI javob berishdi.
+    Sening vazifang ularning noto'g'ri taxminlarini SAMIMIY, YUMORISTIK, O'KIR VA O'RGATUVCHI uslubda "roast" (hazilomuz tanqid) qilish.
+
+    SAVOL: {question_text}
+    TO'G'RI JAVOB: {correct_letter}) {correct_text}
+
+    NOTO'G'RI TAXMIN QILGANLAR VA ULARNING VARIANTLARI:
+    {wrong_str}
+
+    TALABLAR:
+    1. Har bir noto'g'ri variant guruhi uchun ularning ismlarini tilga olib, nima uchun u variant mutlaqo xato va mantiqsiz ekanligini kulgili va ilmiy/tarixiy faktlar bilan tushuntir.
+    2. Format:
+       "🔥 **Sardor, Ali** — sizlar B variantini tanladingiz. Hazillashyapsizlarmi? [Nima uchun B xato ekanligi haqida 1-2 gap kulgili tushuntirish]..."
+    3. Hojatga yarasha kulgili, ozgina piching bilan, lekin haqorat qilmasdan va bilim beruvchi bo'lsin.
+    4. Faqat o'zbek tilida, Telegram xabari formatida yoz. Markdown yoki HTML teglar ishlatma.
+    """
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    payload = {
+        "model": "openai/gpt-oss-120b",
+        "messages": [
+            {"role": "system", "content": "Sen o'zbek tilida kulgili va aqlli hazil qiluvchi viktorina botisan."},
+            {"role": "user", "content": prompt}
+        ],
+        "temperature": 0.8,
+        "max_tokens": 400
+    }
+
+    try:
+        res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=8)
+        data = res.json()
+        if "choices" in data and len(data["choices"]) > 0:
+            roast_text = data["choices"][0]["message"]["content"].strip()
+            return f"\n\n🌶️ <b>NOTO'G meyoriy ROAST & TANQID:</b>\n{escape_tg_html(roast_text)}"
+    except Exception as e:
+        logger.warning(f"Failed to generate Groq roast: {e}")
+
+    # Fallback roast if Groq takes too long or fails
+    fallback_lines = ["\n\n🌶️ <b>NOTO'G'RI JAVOB BERGANLAR:</b>"]
+    for letter, names in wrong_guesses_grouped.items():
+        opt_text = options.get(letter, "")
+        fallback_lines.append(f"• <b>{', '.join(map(escape_tg_html, names))}</b> — {letter}) {escape_tg_html(opt_text)} variantini tanladingiz. Bu variant to'g'ri javobdan ancha yiroq edi! 😂")
+    return "\n".join(fallback_lines)
+
 # --- Offline Fallback Questions ---
 OFFLINE_BACKUP_QUESTIONS = [
     {
@@ -433,30 +423,6 @@ OFFLINE_BACKUP_QUESTIONS = [
         "correct": "A",
         "explanation": "Baykal ko'li dunyodagi eng qadimgi va eng chuqur (1642 metr) chuchuk suv havzasidir.",
         "detailed_explanation": "Baykal ko'li Sibir janubida joylashgan bo'lib, uning yoshi 25 million yildan oshiq. U dunyodagi barcha erigan toza chuchuk suv zaxirasining salkam 20 foizini o'zida saqlaydi."
-    },
-    {
-        "subject": "O'zbekiston tarixi",
-        "question": "Buyuk ipak yo'lining markazida joylashgan qadimiy 'Afrosiyob' shaharchasi qaysi shahar hududida?",
-        "options": {"A": "Samarqand", "B": "Buxoro", "C": "Xiva", "D": "Termiz"},
-        "correct": "A",
-        "explanation": "Afrosiyob qadimiy Samarqandning 13-asrgacha bo'lgan dastlabki o'rni hisoblanadi.",
-        "detailed_explanation": "Afrosiyob tepaliklari qadimiy So'g'd poytaxti Samarqandning asl o'rnidir. 1220-yilda Chingizxon qo'shinlari vayron qilgunga qadar shahar aholisi shu yerda yashagan. U yerdan topilgan 'Elchilar zali' devoriy suratlari 7-asr madaniyatining noyob durdonasidir."
-    },
-    {
-        "subject": "Fizika",
-        "question": "Oddiy atmosfera bosimida toza suv necha daraja Selsiyda qaynaydi?",
-        "options": {"A": "100°C", "B": "90°C", "C": "80°C", "D": "120°C"},
-        "correct": "A",
-        "explanation": "Dengiz sathidagi normal atmosfera bosimida toza suv 100°C da qaynaydi.",
-        "detailed_explanation": "Qaynash nuqtasi atmosfera bosimiga bevosita bog'liq. Dengiz sathida 1 atmosfera bosimida suv 100°C da qaynasa, baland tog'larda (masalan, Everestda) past atmosfera bosimi tufayli suv 70°C dayoq qaynay boshlaydi."
-    },
-    {
-        "subject": "Islom tarixi",
-        "question": "Payg'ambarimiz Muhammad (s.a.v.) qaysi shaharda tavallud topganlar?",
-        "options": {"A": "Makka", "B": "Madina", "C": "Toif", "D": "Quddus"},
-        "correct": "A",
-        "explanation": "Payg'ambarimiz (s.a.v.) milodiy 571-yilda Makka shahrida tavallud topganlar.",
-        "detailed_explanation": "Payg'ambarimiz Muhammad (s.a.v.) milodiy 571-yil Makka shahrida dunyoga kelganlar. 40 yoshlarida Makka yaqinidagi Hiro g'orida ilk vahiy qabul qilib, Islom da'vatini aynan Makka zaminida boshlaganlar."
     }
 ]
 
@@ -495,7 +461,7 @@ def fetch_question(q_num, recent_history):
     4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
     
     BATAFSIL IZOH TALABI:
-    - 'detailed_explanation' maydonida mavzuning qiziqarli ilmiy/tarixiy sabab-oqibatlari, fonga oid tafsilotlari va qiziqarli faktlarini 2-3 xatboshida chiroyli tushuntirib ber. Bu matn Telegramda ochilib-yopiluvchi blokda ko'rinadi.
+    - 'detailed_explanation' maydonida mavzuning qiziqarli ilmiy/tarixiy sabab-oqibatlari, fonga oid tafsilotlari va qiziqarli faktlarini 2-3 xatboshida chiroyli tushuntirib ber.
     
     Faqat toza JSON formatida javob ber:
     {{
@@ -564,7 +530,7 @@ def fetch_question(q_num, recent_history):
 
 # --- Intake Window Evaluator ---
 async def evaluate_initial_window(app, target_q_num: int):
-    """Waits full calibrated duration, then awards points (10, 5, 3) to the fastest correct guesses."""
+    """Waits full 30 seconds, then awards points and roasts incorrect guessers."""
     await asyncio.sleep(INITIAL_WINDOW_SECONDS)
     global round_state
 
@@ -575,7 +541,25 @@ async def evaluate_initial_window(app, target_q_num: int):
     answers = round_state["first_10s_answers"]
     correct_choice = round_state["correct"]
 
-    correct_answers = [ans for ans in answers if ans["choice"] == correct_choice]
+    # Deduplicate guesses by user ID
+    unique_answers = []
+    seen_ids = set()
+    for ans in answers:
+        if ans["user"].id not in seen_ids:
+            seen_ids.add(ans["user"].id)
+            unique_answers.append(ans)
+
+    correct_answers = [ans for ans in unique_answers if ans["choice"] == correct_choice]
+    wrong_answers = [ans for ans in unique_answers if ans["choice"] != correct_choice]
+
+    # Group wrong guesses by option
+    wrong_grouped = {}
+    for ans in wrong_answers:
+        letter = ans["choice"]
+        name = ans["user"].first_name or "O'yinchi"
+        if letter not in wrong_grouped:
+            wrong_grouped[letter] = []
+        wrong_grouped[letter].append(name)
 
     if correct_answers:
         round_state["active"] = False
@@ -588,14 +572,7 @@ async def evaluate_initial_window(app, target_q_num: int):
         medals = ["🥇", "🥈", "🥉"]
         winners_lines = []
 
-        unique_correct = []
-        seen_ids = set()
-        for ans in correct_answers:
-            if ans["user"].id not in seen_ids:
-                seen_ids.add(ans["user"].id)
-                unique_correct.append(ans)
-
-        for idx, ans in enumerate(unique_correct[:3]):
+        for idx, ans in enumerate(correct_answers[:3]):
             user = ans["user"]
             name = user.first_name or "O‘yinchi"
             pts = points_map[idx]
@@ -612,18 +589,27 @@ async def evaluate_initial_window(app, target_q_num: int):
         ans_text = round_state["options"].get(correct_choice, "")
         winners_block = "\n".join(winners_lines)
 
-        extra_correct = len(unique_correct) - 3
+        extra_correct = len(correct_answers) - 3
         extra_note = f"\n👏 Yana {extra_correct} kishi to‘g‘ri topdi, ammo shohsupaga ulgurmadi!" if extra_correct > 0 else ""
 
         izoh_formatted = format_izoh_block(round_state['explanation'], round_state['detailed_explanation'])
         rating_formatted = format_leaderboard_block(leaderboard_str)
+        
+        # Generate witty dynamic roasts for incorrect guesses
+        roast_section = generate_dynamic_roast(
+            round_state["question_text"],
+            round_state["options"],
+            correct_choice,
+            wrong_grouped
+        )
 
         reply = (
             f"⏰ <b>30 SONIYA TUGADI!</b>\n\n"
             f"🎯 <b>TO‘G‘RI JAVOB:</b> {correct_choice}) {escape_tg_html(ans_text)}\n"
             f"{izoh_formatted}\n\n"
             f"⚡ <b>G‘OLIBLAR VA BALLAR:</b>\n"
-            f"{winners_block}{extra_note}\n\n"
+            f"{winners_block}{extra_note}"
+            f"{roast_section}\n\n"
             f"{rating_formatted}\n\n"
             f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
         )
@@ -634,10 +620,18 @@ async def evaluate_initial_window(app, target_q_num: int):
         )
     else:
         if answers:
+            roast_section = generate_dynamic_roast(
+                round_state["question_text"],
+                round_state["options"],
+                correct_choice,
+                wrong_grouped
+            )
             await app.bot.send_message(
                 GROUP_CHAT_ID,
-                "⏳ 30 soniya o‘tdi, ammo to‘g‘ri javob berilmadi!\n"
-                "🔥 O‘yin davom etadi — endi kim birinchi to‘g‘ri topsa, to‘liq 10 ball oladi!"
+                f"⏳ <b>30 soniya o‘tdi, ammo biror kishi ham to‘g‘ri topolmadi!</b>"
+                f"{roast_section}\n\n"
+                f"🔥 O‘yin davom etadi — endi kim birinchi to‘g‘ri topsa, to‘liq 10 ball oladi!",
+                parse_mode="HTML"
             )
 
 # --- Round Engine ---
@@ -831,7 +825,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
             )
             
-            # Preserves topic thread routing if enabled
             kwargs = {"parse_mode": "HTML"}
             if update.message.message_thread_id:
                 kwargs["message_thread_id"] = update.message.message_thread_id
@@ -843,6 +836,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             )
     except Exception as e:
         logger.error(f"Error handling sudden death answer: {e}", exc_info=True)
+
 # --- Commands ---
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
@@ -969,7 +963,6 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(msg)
 
 async def cmd_cuss(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Adds a custom word to the permanent ban list and deletes the trigger message."""
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
     if not await is_admin(update, context):
@@ -1016,7 +1009,6 @@ async def cmd_cuss(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 async def cmd_uncuss(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Removes a word from the custom ban list."""
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
     if not await is_admin(update, context):
@@ -1062,7 +1054,6 @@ async def cmd_uncuss(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 async def cmd_cusslist(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Shows all custom-added banned words."""
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
     if not await is_admin(update, context):
