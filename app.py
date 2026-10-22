@@ -731,7 +731,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     text = update.message.text.strip()
 
-    # 1. SILENT PROFANITY CENSOR (Zero Tokens, Instant Deletion)
+    # 1. SILENT PROFANITY CENSOR
     if is_vulgar(text):
         try:
             await update.message.delete()
@@ -753,9 +753,12 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Delete answer message immediately to prevent chat spam and copying
     try:
-        await update.message.delete()
+        await context.bot.delete_message(
+            chat_id=update.effective_chat.id,
+            message_id=update.message.message_id
+        )
     except Exception as e:
-        logger.warning(f"Could not delete answer message: {e}")
+        logger.error(f"Failed to delete user answer message: {e}")
 
     # Silently ignore repeat attempts
     if user.id in round_state["attempted_users"]:
@@ -768,17 +771,18 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     # Live-edit the question message to show the list of respondents
     if round_state["message_id"]:
-        answered_lines = "\n".join([f"• {name}" for name in round_state["answered_names"]])
+        answered_lines = "\n".join([f"• {escape_tg_html(name)}" for name in round_state["answered_names"]])
         updated_text = (
             f"{round_state['base_text']}\n\n"
-            f"👥 Javob berganlar ({len(round_state['answered_names'])}):\n"
+            f"👥 <b>Javob berganlar ({len(round_state['answered_names'])}):</b>\n"
             f"{answered_lines}"
         )
         try:
             await context.bot.edit_message_text(
                 chat_id=GROUP_CHAT_ID,
                 message_id=round_state["message_id"],
-                text=updated_text
+                text=updated_text,
+                parse_mode="HTML"
             )
         except Exception as e:
             logger.warning(f"Could not update question message: {e}")
@@ -826,14 +830,19 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 f"{rating_formatted}\n\n"
                 f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
             )
+            
+            # Preserves topic thread routing if enabled
+            kwargs = {"parse_mode": "HTML"}
+            if update.message.message_thread_id:
+                kwargs["message_thread_id"] = update.message.message_thread_id
+
             await context.bot.send_message(
                 GROUP_CHAT_ID, 
                 reply, 
-                parse_mode="HTML"
+                **kwargs
             )
     except Exception as e:
         logger.error(f"Error handling sudden death answer: {e}", exc_info=True)
-
 # --- Commands ---
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
