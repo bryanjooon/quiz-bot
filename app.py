@@ -331,9 +331,10 @@ def get_grade_info(q_num: int):
     return label, score
 
 # --- Groq Dynamic Roast Generator ---
+# --- Groq Dynamic Roast Generator ---
 def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses_grouped):
     """
-    Sends wrong guesses to Groq to generate witty, educational roasts for wrong choices.
+    Sends wrong guesses to Groq to generate complete, witty, educational roasts for wrong choices.
     wrong_guesses_grouped format: {"B": ["John", "Mark"], "D": ["Wesley"]}
     """
     if not wrong_guesses_grouped:
@@ -341,7 +342,6 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
 
     correct_text = options.get(correct_letter, "")
     
-    # Format incorrect guessers into a string for the prompt
     wrong_block = []
     for letter, names in wrong_guesses_grouped.items():
         opt_text = options.get(letter, "")
@@ -351,7 +351,7 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
 
     prompt = f"""
     Sen Telegram viktorina botisan. O'yinning ushbu raundida ba'zi ishtirokchilar NOTO'G'RI javob berishdi.
-    Sening vazifang ularning noto'g'ri taxminlarini SAMIMIY, YUMORISTIK, O'KIR VA O'RGATUVCHI uslubda "roast" (hazilomuz tanqid) qilish.
+    Sening vazifang ularning noto'g'ri taxminlarini SAMIMIY, YUMORISTIK, O'TKIR VA O'RGATUVCHI uslubda hazilomuz tanqid (roast) qilish.
 
     SAVOL: {question_text}
     TO'G'RI JAVOB: {correct_letter}) {correct_text}
@@ -359,12 +359,13 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
     NOTO'G'RI TAXMIN QILGANLAR VA ULARNING VARIANTLARI:
     {wrong_str}
 
-    TALABLAR:
+    QAT'IY TALABLAR:
     1. Har bir noto'g'ri variant guruhi uchun ularning ismlarini tilga olib, nima uchun u variant mutlaqo xato va mantiqsiz ekanligini kulgili va ilmiy/tarixiy faktlar bilan tushuntir.
-    2. Format:
-       "🔥 **Sardor, Ali** — sizlar B variantini tanladingiz. Hazillashyapsizlarmi? [Nima uchun B xato ekanligi haqida 1-2 gap kulgili tushuntirish]..."
-    3. Hojatga yarasha kulgili, ozgina piching bilan, lekin haqorat qilmasdan va bilim beruvchi bo'lsin.
-    4. Faqat o'zbek tilida, Telegram xabari formatida yoz. Markdown yoki HTML teglar ishlatma.
+    2. JUMALANING TUGALLANISHI: Har bir fikrni albatta MANTIQLAN VA LINGVISTIK TUGALLANGAN to'liq nuqta bilan yakunla! Aslo gapni chala yoki qo'shtirnoq ichida qoldirma!
+    3. Sarlavha yozma (masalan 'Roast:', 'Tanqid:' degan so'zlarni ishlatma).
+    4. Format to'g'ridan-to'g meyoriy quyidagicha boshlansin:
+       "🔥 **Sardor, Ali** — sizlar B variantini tanladingiz. Hazillashyapsizlarmi? [Kulgili va to'liq yakunlangan tushuntirish.]"
+    5. Faqat o'zbek tilida, Telegram xabari formatida yoz. Markdown yoki HTML teglar ishlatma.
     """
 
     headers = {
@@ -375,27 +376,29 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
     payload = {
         "model": "openai/gpt-oss-120b",
         "messages": [
-            {"role": "system", "content": "Sen o'zbek tilida kulgili va aqlli hazil qiluvchi viktorina botisan."},
+            {"role": "system", "content": "Sen o'zbek tilida kulgili, aniq va to'liq gaplar bilan hazil qiluvchi viktorina botisan."},
             {"role": "user", "content": prompt}
         ],
-        "temperature": 0.8,
-        "max_tokens": 400
+        "temperature": 0.75,
+        "max_tokens": 800
     }
 
     try:
-        res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=8)
+        res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=10)
         data = res.json()
         if "choices" in data and len(data["choices"]) > 0:
             roast_text = data["choices"][0]["message"]["content"].strip()
-            return f"\n\n🌶️ <b>NOTO'G meyoriy ROAST & TANQID:</b>\n{escape_tg_html(roast_text)}"
+            # Clean quote residues or lingering double-quotes
+            roast_text = re.sub(r'["“„]', '', roast_text)
+            return f"\n\n🔥 <b>LOSERS:</b>\n{escape_tg_html(roast_text)}"
     except Exception as e:
         logger.warning(f"Failed to generate Groq roast: {e}")
 
-    # Fallback roast if Groq takes too long or fails
-    fallback_lines = ["\n\n🌶️ <b>NOTO'G'RI JAVOB BERGANLAR:</b>"]
+    # Fallback if Groq takes too long
+    fallback_lines = ["\n\n🔥 <b>LOSERS:</b>"]
     for letter, names in wrong_guesses_grouped.items():
         opt_text = options.get(letter, "")
-        fallback_lines.append(f"• <b>{', '.join(map(escape_tg_html, names))}</b> — {letter}) {escape_tg_html(opt_text)} variantini tanladingiz. Bu variant to'g'ri javobdan ancha yiroq edi! 😂")
+        fallback_lines.append(f"• <b>{', '.join(map(escape_tg_html, names))}</b> — {letter}) {escape_tg_html(opt_text)} variantini tanladingiz. Bu variant to'g'ri javobdan ancha yiroq edi!")
     return "\n".join(fallback_lines)
 
 # --- Offline Fallback Questions ---
