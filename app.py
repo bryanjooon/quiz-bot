@@ -378,6 +378,14 @@ def format_izoh_block(explanation: str, detailed: str) -> str:
         )
     return f"💡 <b>Izoh:</b> {clean_expl}"
 
+def format_leaderboard_block(leaderboard_str: str) -> str:
+    """Wraps the leaderboard in an expandable collapsible quote block."""
+    clean_lb = escape_tg_html(leaderboard_str)
+    return (
+        f"<blockquote expandable>📊 <b>TOP-10 REYTINQ (ko'rish uchun bosing):</b>\n\n"
+        f"{clean_lb}</blockquote>"
+    )
+
 def clean_json_response(raw_text: str) -> dict:
     cleaned = raw_text.strip()
     cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
@@ -608,23 +616,22 @@ async def evaluate_initial_window(app, target_q_num: int):
         extra_correct = len(unique_correct) - 3
         extra_note = f"\n👏 Yana {extra_correct} kishi to‘g‘ri topdi, ammo shohsupaga ulgurmadi!" if extra_correct > 0 else ""
 
-        izoh_formatted = format_izoh_block(round_state['explanation'], round_state['detailed_explanation'])
+     izoh_formatted = format_izoh_block(round_state['explanation'], round_state['detailed_explanation'])
+            rating_formatted = format_leaderboard_block(leaderboard_str)
 
-        reply = (
-            f"⏰ <b>30 SONIYA TUGADI!</b>\n\n"
-            f"🎯 <b>TO‘G‘RI JAVOB:</b> {correct_choice}) {escape_tg_html(ans_text)}\n"
-            f"{izoh_formatted}\n\n"
-            f"⚡ <b>G‘OLIBLAR VA BALLAR:</b>\n"
-            f"{winners_block}{extra_note}\n\n"
-            f"📊 <b>TOP-10 REYTINQ:</b>\n"
-            f"{escape_tg_html(leaderboard_str)}\n\n"
-            f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
-        )
-        await app.bot.send_message(
-            GROUP_CHAT_ID, 
-            reply, 
-            parse_mode="HTML"
-        )
+            reply = (
+                f"🎯 <b>TO‘G‘RI JAVOB!</b>\n\n"
+                f"⚡ <b>G‘olib:</b> {escape_tg_html(winner_name)} (+10 ball!)\n"
+                f"✅ <b>Javob:</b> {correct_letter}) {escape_tg_html(ans_text)}\n"
+                f"{izoh_formatted}\n\n"
+                f"{rating_formatted}\n\n"
+                f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
+            )
+            await context.bot.send_message(
+                GROUP_CHAT_ID, 
+                reply, 
+                parse_mode="HTML"
+            )
     else:
         if answers:
             await app.bot.send_message(
