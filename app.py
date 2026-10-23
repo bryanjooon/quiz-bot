@@ -47,6 +47,9 @@ CYRILLIC_TO_LATIN = {
 
 INITIAL_WINDOW_SECONDS = 30
 
+# Name of global player whose score syncs across all groups
+GLOBAL_USER_NAME = "biloliddin"
+
 # --- Persistent Scores Storage per Chat ID ---
 SCORES_FILE = "scores.json"
 ALL_SCORES = {}  # { chat_id_str: { player_name: score } }
@@ -74,6 +77,35 @@ def get_chat_scores(chat_id: int) -> dict:
     if cid not in ALL_SCORES:
         ALL_SCORES[cid] = {}
     return ALL_SCORES[cid]
+
+def update_player_score(chat_id: int, player_name: str, pts_to_add: int) -> int:
+    """Updates score locally, and syncs globally if the player is GLOBAL_USER_NAME."""
+    cid = str(chat_id)
+    chat_dict = get_chat_scores(chat_id)
+    
+    # Update local score
+    new_score = chat_dict.get(player_name, 0) + pts_to_add
+    chat_dict[player_name] = new_score
+
+    # Global sync for biloliddin across all groups
+    if player_name.lower() == GLOBAL_USER_NAME.lower():
+        # Find maximum existing score across any chat
+        max_global = new_score
+        for c_key, c_scores in ALL_SCORES.items():
+            for p_key, p_val in c_scores.items():
+                if p_key.lower() == GLOBAL_USER_NAME.lower() and p_val > max_global:
+                    max_global = p_val
+        
+        # Apply synced score to all groups
+        for c_key in ALL_SCORES.keys():
+            for p_key in list(ALL_SCORES[c_key].keys()):
+                if p_key.lower() == GLOBAL_USER_NAME.lower():
+                    ALL_SCORES[c_key][p_key] = max_global
+            if GLOBAL_USER_NAME not in ALL_SCORES[c_key]:
+                ALL_SCORES[c_key][GLOBAL_USER_NAME] = max_global
+
+    save_scores()
+    return chat_dict[player_name]
 
 # --- Vulgarity, Harassment & Profanity Filter ---
 VULGAR_PATTERNS = [
@@ -185,7 +217,6 @@ QUESTION_ANGLES = [
     "Mantiqiy deduksiya va chuqur tahlilni talab qiluvchi jumboq"
 ]
 
-# Round State per Chat ID
 def create_empty_round():
     return {
         "active": False,
@@ -333,18 +364,1003 @@ def format_izoh_block(explanation: str, detailed: str) -> str:
         return (
             f"💡 <b>Izoh:</b> {clean_expl}\n\n"
             f"<blockquote expandable>📖 <b>Batafsil ma'lumot (o'qish uchun bosing):</b>\n\n"
-            f"{clean_detail}
+            f"{clean_detail}</blockquote>"
+        )
+    return f"💡 <b>Izoh:</b> {clean_expl}"
 
-```python?code_reference&code_event_index=1
-# Syntax check for multi-group app.py draft
-test_multi = """
-import os, re, json, time, random, asyncio, logging, threading
-from http.server import HTTPServer, BaseHTTPRequestHandler
-from datetime import datetime
-import pytz, requests
+def format_leaderboard_block(leaderboard_str: str) -> str:
+    clean_lb = escape_tg_html(leaderboard_str)
+    return (
+        f"<blockquote expandable>📊 <b>TOP-10 REYTINQ (ko'rish uchun bosing):</b>\n\n"
+        f"{clean_lb}</blockquote>"
+    )
 
-raw_ids = "-100123456789,-4821562106"
-GROUP_CHAT_IDS = [int(i.strip()) for i in raw_ids.split(",") if i.strip() and i.strip() != "0"]
-print("Parsed group IDs:", GROUP_CHAT_IDS)
-"""
-exec(test_multi)
+def clean_json_response(raw_text: str) -> dict:
+    cleaned = raw_text.strip()
+    cleaned = re.sub(r"^```(?:json)?", "", cleaned, flags=re.IGNORECASE).strip()
+    cleaned = re.sub(r"```$", "", cleaned).strip()
+    match = re.search(r"\{.*\}", cleaned, re.DOTALL)
+    if match:
+        cleaned = match.group(0)
+    return json.loads(cleaned)
+
+def get_grade_info(q_num: int):
+    grade_num = 5 + ((q_num - 1) // 1000)
+    if grade_num <= 11:
+        label = f"{grade_num}-sinf"
+        score = f"{grade_num - 4}/10"
+    elif grade_num <= 15:
+        label = "Oliy ta'lim (Bakalavr)"
+        score = "8/10"
+    else:
+        label = "Akademik / Ekspert"
+        score = "10/10"
+    return label, score
+
+# --- Groq Dynamic Roast Generator ---
+def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses_grouped):
+    if not wrong_guesses_grouped:
+        return ""
+
+    correct_text = options.get(correct_letter, "")
+    
+    wrong_block = []
+    for letter, names in wrong_guesses_grouped.items():
+        opt_text = options.get(letter, "")
+        wrong_block.append(f"- Variant {letter}) '{opt_text}': {', '.join(names)}")
+    
+    wrong_str = "\n".join(wrong_block)
+
+    prompt = f"""
+    Sen Telegram viktorinasi uchun ENG KULGILI, O'TKIR VA AQLLI "ROASTER"SAN.
+    Ishtirokchilar noto'g'ri javob berishdi. Sening vazifang ularni SHAXSAN nomma-nom aytib, tanlagan varianti uchun samimiy va ma'lumot beruvchi tarzda kulgili tanqid qilish.
+
+    SAVOL: {question_text}
+    TO'G'RI JAVOB: {correct_letter}) {correct_text}
+
+    NOTO'G'RI TAXMIN QILGANLAR VA ULARNING VARIANTLARI:
+    {wrong_str}
+
+    QAT'IY TALABLAR:
+    1. Aholini SHAXSAN va VARIANTMA-VARIANT nomma-nom aytib roast qil!
+    2. Har bir guruh/odam uchun ularning variantini MANTIQAN VA ILMIY/TARIXIY tomondan nima uchun xato ekanligini 1-2 gapda achchiq va kulgili qilib tushuntir (roast qilayotganda ularga bilim ham ber!).
+    3. Aslo bir xil takroriy gaplar ('bu javobdan ancha yiroq edi' va h.k.) ISHLATMA! Har safar unikal va ijodiy yondash.
+    4. Hech qanday sarlavha (masalan: "Roast:", "Losers:") YOZMA! To'g'ridan-to'g'ri birinchi odam/variantdan boshla.
+    5. Har bir fikr to'liq va tugallangan nuqta bilan yakunlansin.
+    """
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    models_to_try = [
+        "openai/gpt-oss-120b",
+        "qwen/qwen3.8-27b"
+    ]
+
+    for model in models_to_try:
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "Sen o'zbek tilida juda kulgili, o'tkir va aqlli viktorina botisan."},
+                {"role": "user", "content": prompt}
+            ],
+            "temperature": 0.85,
+            "max_tokens": 700
+        }
+
+        try:
+            res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=20)
+            data = res.json()
+            if "choices" in data and len(data["choices"]) > 0:
+                roast_text = data["choices"][0]["message"]["content"].strip()
+                if roast_text:
+                    return f"\n\n🔥 <b>LOSERS:</b>\n{roast_text}"
+        except Exception as e:
+            logger.warning(f"Roast model {model} failed: {e}")
+
+    ROAST_TEMPLATES = [
+        "🔥 <b>{names}</b> — {letter}) variantini tanladingiz. Bu variant mantiqan to'g'ri javobga mutlaqo zid edi!",
+        "🔥 <b>{names}</b> — sizlar {letter}) variantiga ishondingiz-a? Tarix va ilmfan bu tanlovingizdan biroz xafa bo'ldi! 😂",
+        "🔥 <b>{names}</b> — {letter}) variantini qayerdan topdingiz? Bu variant mavzuga umuman aloqasiz edi!",
+        "🔥 <b>{names}</b> — {letter}) variantini belgilab tavakkal qildingiz, lekin bu safar omadingiz umuman kelmadi!"
+    ]
+
+    fallback_lines = ["\n\n🔥 <b>LOSERS:</b>"]
+    for letter, names in wrong_guesses_grouped.items():
+        template = random.choice(ROAST_TEMPLATES)
+        escaped_names = ", ".join([f"<b>{escape_tg_html(n)}</b>" for n in names])
+        fallback_lines.append(template.format(names=escaped_names, letter=letter))
+        
+    return "\n".join(fallback_lines)
+
+# --- Offline Fallback Questions ---
+OFFLINE_BACKUP_QUESTIONS = [
+    {
+        "subject": "Astronomiya",
+        "question": "Quyosh sistemasidagi eng katta sayyora qaysi?",
+        "options": {"A": "Yupiter", "B": "Saturn", "C": "Mars", "D": "Venera"},
+        "correct": "A",
+        "explanation": "Yupiter Quyosh tizimidagi eng ulkan gigant gaz sayyorasidir.",
+        "detailed_explanation": "Yupiter sayyorasi shu qadar ulkanki, uning ichiga Quyosh tizimidagi barcha boshqa sayyoralarni bemalol joylashtirish mumkin. U asosan vodorod va geliydan iborat bo'lib, o'zining kuchli magnit maydoniga ega. Mashhur 'Katta Qizil Dog'' esa unda kamida 300 yildan beri to'xtamayotgan ulkan bo'rondir."
+    },
+    {
+        "subject": "Biologiya",
+        "question": "O'simliklar quyosh nuri yordamida oziq modda ishlab chiqarish jarayoni nima deyiladi?",
+        "options": {"A": "Fotosintez", "B": "Nafas olish", "C": "Transpiratsiya", "D": "Diffuziya"},
+        "correct": "A",
+        "explanation": "Fotosintez jarayonida xlorofill yorug'lik energiyasini kimyoviy energiyaga aylantiradi.",
+        "detailed_explanation": "Fotosintez — yer yuzidagi barcha tiriklikning asosi. Yashil o'simliklar barglaridagi xloroplastlar yorug'lik, suv va karbonat angidriddan foydalanib oziq moddalar hamda biz nafas oladigan toza kislorodni ishlab chiqaradi."
+    },
+    {
+        "subject": "Geografiya",
+        "question": "Dunyodagi eng chuqur chuchuk suvli ko'l qaysi?",
+        "options": {"A": "Baykal", "B": "Kaspiy", "C": "Viktoriya", "D": "Michigan"},
+        "correct": "A",
+        "explanation": "Baykal ko'li dunyodagi eng qadimgi va eng chuqur (1642 metr) chuchuk suv havzasidir.",
+        "detailed_explanation": "Baykal ko'li Sibir janubida joylashgan bo'lib, uning yoshi 25 million yildan oshiq. U dunyodagi barcha erigan toza chuchuk suv zaxirasining salkam 20 foizini o'zida saqlaydi."
+    }
+]
+
+# --- Question Generator ---
+def fetch_question(q_num, recent_history):
+    grade_label, grade_score = get_grade_info(q_num)
+
+    if q_num % 4 == 0:
+        chosen_topic = random.choice(ISLAMIC_TOPIC_POOLS)
+    else:
+        chosen_topic = random.choice(TOPIC_POOLS)
+
+    chosen_angle = random.choice(QUESTION_ANGLES)
+    cache_buster = f"{int(time.time())}_{random.randint(1000, 9999)}"
+    history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "Hozircha yo'q"
+
+    prompt = f"""
+    Sen Telegram viktorinasi uchun ORIGINAL va TAKRORLANMAS savol tuzuvchisan.
+    Hozirgi savol raqami: #{q_num} / 1 000 000.
+    Unikal kalit: {cache_buster}.
+    
+    QAT'IY DARAJA TALABI:
+    - Hozirgi daraja: **{grade_label}** darajasi ({grade_score}).
+    - Savol murakkabligi va tili aynan **{grade_label}** o'quvchisi qiynalmasdan tushunadigan soddalikda bo'lsin.
+    - O'ta qiyin akademik terminlar yoki chalkash formulalarni BERMA!
+    - Agar mavzu maktab dasturida bo'lmasa ham, uni {grade_label} darajasiga moslab sodda va qiziqarli tuz.
+
+    MAVZU: {chosen_topic}
+    USLUB: {chosen_angle}
+    
+    QAT'IY TAQIQLAR:
+    1. LINGVISTIK VA SO'Z KELIB CHIQISHI TAQIQLANADI ('qaysi tildan olingan', 'ma'nosi nima' kabi savollar bo'lmasin).
+    2. SO'NGGI SAVOLLAR TAKRORLANMASIN:
+    {history_block}
+    3. Agar mavzu Islom dini yoki tarixiga oid bo'lsa, savol faqat sahih manbalar asosida, hurmat bilan tuzilsin.
+    4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
+    
+    BATAFSIL IZOH TALABI:
+    - 'detailed_explanation' maydonida mavzuning qiziqarli ilmiy/tarixiy sabab-oqibatlari, fonga oid tafsilotlari va qiziqarli faktlarini 2-3 xatboshida chiroyli tushuntirib ber.
+    
+    Faqat toza JSON formatida javob ber:
+    {{
+        "subject": "{chosen_topic.split(':')[0].strip()}",
+        "grade": "{grade_label}",
+        "difficulty_score": "{grade_score}",
+        "question": "Savol matni o'zbek tilida",
+        "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
+        "correct": "A",
+        "explanation": "Qisqa tushuntirish (1 gap)",
+        "detailed_explanation": "Kengaytirilgan tahlil, qiziqarli faktlar va sabab-oqibatlar (2-3 xatboshi)"
+    }}
+    """
+
+    headers = {
+        "Authorization": f"Bearer {GROQ_API_KEY}",
+        "Content-Type": "application/json"
+    }
+
+    models_to_try = [
+        "openai/gpt-oss-120b",
+        "qwen/qwen3.8-27b",
+        "openai/gpt-oss-20b"
+    ]
+
+    for model in models_to_try:
+        payload = {
+            "model": model,
+            "messages": [
+                {"role": "system", "content": "Sen faqat to'g'ri JSON qaytaruvchi yordamchisan."},
+                {"role": "user", "content": prompt}
+            ],
+            "response_format": {"type": "json_object"},
+            "temperature": 0.75
+        }
+        try:
+            res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=30)
+            data = res.json()
+            if "error" in data:
+                logger.warning(f"Groq {model} error: {data['error'].get('message')}. Retrying next model...")
+                continue
+
+            raw_text = data['choices'][0]['message']['content']
+            parsed = clean_json_response(raw_text)
+            
+            if "question" in parsed and "options" in parsed and "correct" in parsed:
+                parsed["grade"] = grade_label
+                parsed["difficulty_score"] = grade_score
+                if "detailed_explanation" not in parsed or not parsed["detailed_explanation"]:
+                    parsed["detailed_explanation"] = parsed.get("explanation", "")
+                logger.info(f"Groq generated successfully using {model}: {parsed['question'][:40]}...")
+                return parsed
+
+        except Exception as e:
+            logger.warning(f"Model {model} failed ({e}). Trying next model...")
+
+    logger.error("All Groq models failed. Deploying diverse offline backup question.")
+    available_backups = [
+        q for q in OFFLINE_BACKUP_QUESTIONS 
+        if not any(q["question"][:30] in h for h in recent_history)
+    ]
+    selected_backup = random.choice(available_backups if available_backups else OFFLINE_BACKUP_QUESTIONS).copy()
+    selected_backup["grade"] = grade_label
+    selected_backup["difficulty_score"] = grade_score
+    return selected_backup
+
+# --- Intake Window Evaluator per Group ---
+async def evaluate_initial_window(app, chat_id: int, target_q_num: int):
+    """Waits 30s, evaluates answers locally for the specific group, and awards points."""
+    await asyncio.sleep(INITIAL_WINDOW_SECONDS)
+    round_st = get_round_state(chat_id)
+
+    if not round_st["active"] or round_st["q_num"] != target_q_num:
+        return
+
+    round_st["in_initial_window"] = False
+    answers = round_st["answers"]
+    correct_choice = round_st["correct"]
+
+    unique_answers = []
+    seen_ids = set()
+    for ans in answers:
+        if ans["user"].id not in seen_ids:
+            seen_ids.add(ans["user"].id)
+            unique_answers.append(ans)
+
+    correct_answers = [ans for ans in unique_answers if ans["choice"] == correct_choice]
+    wrong_answers = [ans for ans in unique_answers if ans["choice"] != correct_choice]
+
+    wrong_grouped = {}
+    for ans in wrong_answers:
+        letter = ans["choice"]
+        name = ans["user"].first_name or "O'yinchi"
+        if letter not in wrong_grouped:
+            wrong_grouped[letter] = []
+        wrong_grouped[letter].append(name)
+
+    if correct_answers:
+        round_st["active"] = False
+        correct_answers.sort(key=lambda x: x["timestamp"])
+
+        points_map = [10, 5, 3]
+        medals = ["🥇", "🥈", "🥉"]
+        winners_lines = []
+
+        for idx, ans in enumerate(correct_answers[:3]):
+            user = ans["user"]
+            name = user.first_name or "O‘yinchi"
+            pts = points_map[idx]
+            update_player_score(chat_id, name, pts)
+            winners_lines.append(f"{medals[idx]} {escape_tg_html(name)} — +{pts} ball ({idx + 1}-o‘rin)")
+
+        chat_scores = get_chat_scores(chat_id)
+        leaderboard_str = await update_pin(
+            app.bot,
+            chat_id=chat_id,
+            next_q_num=target_q_num + 1,
+            scores_dict=chat_scores,
+            new_question_summary=round_st["question_text"]
+        )
+
+        ans_text = round_st["options"].get(correct_choice, "")
+        winners_block = "\n".join(winners_lines)
+
+        extra_correct = len(correct_answers) - 3
+        extra_note = f"\n👏 Yana {extra_correct} kishi to‘g‘ri topdi, ammo shohsupaga ulgurmadi!" if extra_correct > 0 else ""
+
+        izoh_formatted = format_izoh_block(round_st['explanation'], round_st['detailed_explanation'])
+        rating_formatted = format_leaderboard_block(leaderboard_str)
+        
+        roast_section = generate_dynamic_roast(
+            round_st["question_text"],
+            round_st["options"],
+            correct_choice,
+            wrong_grouped
+        )
+
+        reply = (
+            f"⏰ <b>30 SONIYA TUGADI!</b>\n\n"
+            f"🎯 <b>TO‘G‘RI JAVOB:</b> {correct_choice}) {escape_tg_html(ans_text)}\n"
+            f"{izoh_formatted}\n\n"
+            f"⚡ <b>G‘OLIBLAR VA BALLAR:</b>\n"
+            f"{winners_block}{extra_note}"
+            f"{roast_section}\n\n"
+            f"{rating_formatted}\n\n"
+            f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
+        )
+        await app.bot.send_message(
+            chat_id, 
+            reply, 
+            parse_mode="HTML"
+        )
+    else:
+        roast_section = generate_dynamic_roast(
+            round_st["question_text"],
+            round_st["options"],
+            correct_choice,
+            wrong_grouped
+        )
+        await app.bot.send_message(
+            chat_id,
+            f"⏳ <b>30 soniya o‘tdi, ammo biror kishi ham to‘g‘ri topolmadi!</b>"
+            f"{roast_section}\n\n"
+            f"🔥 O‘yin davom etadi — endi kim birinchi to‘g‘ri topsa, to‘liq 10 ball oladi!",
+            parse_mode="HTML"
+        )
+
+# --- Round Engine (Multi-Group Post) ---
+async def post_hourly_question(app):
+    for chat_id in GROUP_CHAT_IDS:
+        round_st = get_round_state(chat_id)
+        chat_scores = get_chat_scores(chat_id)
+
+        # 1. AUTO-EXPIRE: If previous question was never answered in this group after 5 mins
+        if round_st["active"]:
+            round_st["active"] = False
+            prev_q_num = round_st["q_num"]
+            prev_correct = round_st["correct"]
+            prev_ans = round_st["options"].get(prev_correct, "")
+            prev_expl = round_st["explanation"]
+            prev_detailed = round_st["detailed_explanation"]
+            prev_q_text = round_st["question_text"]
+
+            answers = round_st["answers"]
+            unique_answers = []
+            seen_ids = set()
+            for ans in answers:
+                if ans["user"].id not in seen_ids:
+                    seen_ids.add(ans["user"].id)
+                    unique_answers.append(ans)
+
+            wrong_answers = [ans for ans in unique_answers if ans["choice"] != prev_correct]
+            wrong_grouped = {}
+            for ans in wrong_answers:
+                letter = ans["choice"]
+                name = ans["user"].first_name or "O'yinchi"
+                if letter not in wrong_grouped:
+                    wrong_grouped[letter] = []
+                wrong_grouped[letter].append(name)
+
+            try:
+                leaderboard_str = await update_pin(
+                    app.bot,
+                    chat_id=chat_id,
+                    next_q_num=prev_q_num + 1,
+                    scores_dict=chat_scores,
+                    new_question_summary=prev_q_text
+                )
+
+                izoh_formatted = format_izoh_block(prev_expl, prev_detailed)
+                roast_section = generate_dynamic_roast(
+                    prev_q_text,
+                    round_st["options"],
+                    prev_correct,
+                    wrong_grouped
+                )
+
+                timeout_msg = (
+                    f"⏰ <b>VAQT TUGADI!</b> (#{prev_q_num:07d})\n\n"
+                    f"Hech kim to‘g‘ri javob bera olmadi.\n"
+                    f"✅ <b>To‘g‘ri javob:</b> {prev_correct}) {escape_tg_html(prev_ans)}\n"
+                    f"{izoh_formatted}"
+                    f"{roast_section}\n\n"
+                    f"⚡ Keyingi savol chiqmoqda..."
+                )
+                await app.bot.send_message(
+                    chat_id, 
+                    timeout_msg, 
+                    parse_mode="HTML"
+                )
+                await asyncio.sleep(1)
+            except Exception as e:
+                logger.error(f"Error expiring unanswered question in {chat_id}: {e}", exc_info=True)
+
+    # 2. Fetch one central question for all groups
+    sample_chat = GROUP_CHAT_IDS[0] if GROUP_CHAT_IDS else 0
+    pin = await get_or_create_leaderboard(app.bot, sample_chat)
+    q_num, _, history = parse_pin_data(getattr(pin, "text", "") or "", sample_chat)
+    
+    data = fetch_question(q_num, history)
+
+    # 3. Post to all registered groups independently
+    for chat_id in GROUP_CHAT_IDS:
+        round_st = get_round_state(chat_id)
+        
+        round_st["active"] = True
+        round_st["q_num"] = q_num
+        round_st["correct"] = data["correct"].upper()
+        round_st["options"] = data["options"]
+        round_st["explanation"] = data["explanation"]
+        round_st["detailed_explanation"] = data.get("detailed_explanation", data["explanation"])
+        round_st["question_text"] = data["question"]
+        round_st["attempted_users"].clear()
+        round_st["answers"].clear()
+        round_st["answered_names"].clear()
+        round_st["in_initial_window"] = True
+        
+        grade_label = data.get("grade", "5-sinf")
+        diff_score = data.get("difficulty_score", "1/10")
+        
+        msg_text = (
+            f"🏆 1 MILLION QUESTIONS · #{q_num:07d}\n"
+            f"📚 Fan: {data['subject']} | 🎓 Bosqich: {grade_label} ({diff_score})\n\n"
+            f"❓ {data['question']}\n\n"
+            f"A) {data['options']['A']}\n"
+            f"B) {data['options']['B']}\n"
+            f"C) {data['options']['C']}\n"
+            f"D) {data['options']['D']}\n\n"
+            f"⚡ Variantni yozing (A, B, C yoki D)!\n"
+            f"⏳ Dastlabki 30 soniya ichida eng tez topgan 3 kishi ball oladi (🥇10, 🥈5, 🥉3)!\n"
+            f"🤫 Javobingiz bot tomonidan o‘chirilib, quyidagi ro‘yxatga kiritiladi."
+        )
+        round_st["base_text"] = msg_text
+        try:
+            sent_msg = await app.bot.send_message(chat_id, msg_text)
+            round_st["message_id"] = sent_msg.message_id
+            logger.info(f"Question #{q_num} posted in {chat_id}.")
+            asyncio.create_task(evaluate_initial_window(app, chat_id, q_num))
+        except Exception as e:
+            logger.error(f"Could not post question to {chat_id}: {e}")
+
+# --- Message Handler ---
+async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    if not update.message or not update.message.text:
+        return
+
+    chat_id = update.effective_chat.id
+    if chat_id not in GROUP_CHAT_IDS:
+        return
+
+    text = update.message.text.strip()
+
+    if is_vulgar(text):
+        try:
+            await update.message.delete()
+        except Exception as e:
+            logger.warning(f"Could not delete vulgar message: {e}")
+        return
+
+    round_st = get_round_state(chat_id)
+    if not round_st["active"]:
+        return
+
+    match = ANSWER_PATTERN.match(text)
+    if not match:
+        return
+
+    user = update.message.from_user
+
+    try:
+        await context.bot.delete_message(
+            chat_id=chat_id,
+            message_id=update.message.message_id
+        )
+    except Exception as e:
+        logger.error(f"Failed to delete user answer message: {e}")
+
+    if user.id in round_st["attempted_users"]:
+        return
+
+    round_st["attempted_users"].add(user.id)
+    user_name = user.first_name or "O‘yinchi"
+    round_st["answered_names"].append(user_name)
+
+    if round_st["message_id"]:
+        answered_lines = "\n".join([f"• {escape_tg_html(name)}" for name in round_st["answered_names"]])
+        updated_text = (
+            f"{round_st['base_text']}\n\n"
+            f"👥 <b>Javob berganlar ({len(round_st['answered_names'])}):</b>\n"
+            f"{answered_lines}"
+        )
+        try:
+            await context.bot.edit_message_text(
+                chat_id=chat_id,
+                message_id=round_st["message_id"],
+                text=updated_text,
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.warning(f"Could not update question message: {e}")
+
+    raw_choice = match.group(1)
+    choice = CYRILLIC_TO_LATIN.get(raw_choice, raw_choice).upper()
+
+    round_st["answers"].append({
+        "user": user,
+        "choice": choice,
+        "timestamp": time.time()
+    })
+
+    if round_st["in_initial_window"]:
+        return
+
+    try:
+        if choice == round_st["correct"]:
+            round_st["active"] = False
+            winner_name = user_name
+            
+            update_player_score(chat_id, winner_name, 10)
+            chat_scores = get_chat_scores(chat_id)
+            
+            leaderboard_str = await update_pin(
+                context.bot,
+                chat_id=chat_id,
+                next_q_num=round_st["q_num"] + 1,
+                scores_dict=chat_scores,
+                new_question_summary=round_st["question_text"]
+            )
+            
+            correct_letter = round_st["correct"]
+            ans_text = round_st["options"].get(correct_letter, "")
+            
+            izoh_formatted = format_izoh_block(round_st['explanation'], round_st['detailed_explanation'])
+            rating_formatted = format_leaderboard_block(leaderboard_str)
+
+            reply = (
+                f"🎯 <b>TO‘G‘RI JAVOB!</b>\n\n"
+                f"⚡ <b>G‘olib:</b> {escape_tg_html(winner_name)} (+10 ball!)\n"
+                f"✅ <b>Javob:</b> {correct_letter}) {escape_tg_html(ans_text)}\n"
+                f"{izoh_formatted}\n\n"
+                f"{rating_formatted}\n\n"
+                f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
+            )
+            
+            kwargs = {"parse_mode": "HTML"}
+            if update.message.message_thread_id:
+                kwargs["message_thread_id"] = update.message.message_thread_id
+
+            await context.bot.send_message(
+                chat_id, 
+                reply, 
+                **kwargs
+            )
+    except Exception as e:
+        logger.error(f"Error handling sudden death answer in {chat_id}: {e}", exc_info=True)
+
+# --- Commands ---
+async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in GROUP_CHAT_IDS:
+        return
+    if not await is_admin(update, context):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        return
+
+    await update.message.reply_text("🧪 Test savoli barcha guruhlarda ishga tushirilmoqda...")
+    await post_hourly_question(context.application)
+
+async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in GROUP_CHAT_IDS:
+        return
+    scores = get_chat_scores(chat_id)
+    body = format_top10_scores(scores)
+    reply = (
+        f"🏆 1 MILLION QUESTIONS · TOP-10 YETAKCHILAR\n\n"
+        f"{body}"
+    )
+    await update.message.reply_text(reply)
+
+async def cmd_myrank(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in GROUP_CHAT_IDS:
+        return
+
+    user = update.effective_user
+    if not user:
+        return
+
+    name = user.first_name or "O‘yinchi"
+    scores = get_chat_scores(chat_id)
+    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    
+    player_rank = None
+    player_pts = 0
+
+    for idx, (p_name, pts) in enumerate(sorted_scores, start=1):
+        if p_name.lower() == name.lower():
+            player_rank = idx
+            player_pts = pts
+            break
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    if player_rank:
+        text = f"👤 <b>{escape_tg_html(name)}</b>ning ushbu guruhdagi natijasi:\n🏆 O'rin: #{player_rank}-o'rin | ⭐️ Ball: {player_pts} ball"
+    else:
+        text = f"👤 <b>{escape_tg_html(name)}</b>, sizda ushbu guruhda hali ballar yo'q!"
+
+    msg = await context.bot.send_message(chat_id, text, parse_mode="HTML")
+    await asyncio.sleep(8)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+async def cmd_set_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in GROUP_CHAT_IDS:
+        return
+    if not await is_admin(update, context):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        return
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    if not update.message.reply_to_message:
+        warn = await context.bot.send_message(
+            chat_id,
+            "⚠️ <b>Foydalanish:</b> Ishtirokchi xabariga reply qilib: <code>/score 118</code>",
+            parse_mode="HTML"
+        )
+        await asyncio.sleep(5)
+        try:
+            await warn.delete()
+        except Exception:
+            pass
+        return
+
+    if not context.args:
+        warn = await context.bot.send_message(
+            chat_id,
+            "⚠️ <b>Foydalanish:</b> <code>/score 118</code>",
+            parse_mode="HTML"
+        )
+        await asyncio.sleep(5)
+        try:
+            await warn.delete()
+        except Exception:
+            pass
+        return
+
+    try:
+        new_score = int(context.args[0])
+    except ValueError:
+        warn = await context.bot.send_message(
+            chat_id,
+            "⚠️ <b>Xatolik:</b> Ball faqat raqamlarda bo'lishi kerak!",
+            parse_mode="HTML"
+        )
+        await asyncio.sleep(5)
+        try:
+            await warn.delete()
+        except Exception:
+            pass
+        return
+
+    target_user = update.message.reply_to_message.from_user
+    target_name = target_user.first_name or "O‘yinchi"
+
+    chat_scores = get_chat_scores(chat_id)
+    chat_scores[target_name] = new_score
+    
+    # Sync if biloliddin
+    if target_name.lower() == GLOBAL_USER_NAME.lower():
+        update_player_score(chat_id, target_name, 0)
+    else:
+        save_scores()
+
+    pin = await get_or_create_leaderboard(context.bot, chat_id)
+    q_num, _, _ = parse_pin_data(getattr(pin, "text", "") or "", chat_id)
+    await update_pin(
+        context.bot,
+        chat_id=chat_id,
+        next_q_num=q_num,
+        scores_dict=chat_scores,
+        new_question_summary=None
+    )
+
+    msg = await context.bot.send_message(
+        chat_id,
+        f"✅ <b>{escape_tg_html(target_name)}</b> ning ushbu guruhdagi bali <b>{new_score}</b> deb belgilandi!",
+        parse_mode="HTML"
+    )
+    await asyncio.sleep(6)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in GROUP_CHAT_IDS:
+        return
+    
+    if not await is_admin(update, context):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        return
+
+    round_st = get_round_state(chat_id)
+    if not round_st["active"]:
+        await update.message.reply_text("ℹ️ Hozirda faol savol yo'q.")
+        return
+
+    round_st["active"] = False
+    correct_letter = round_st["correct"]
+    ans_text = round_st["options"].get(correct_letter, "")
+    explanation = round_st["explanation"]
+    detailed = round_st["detailed_explanation"]
+    q_text = round_st.get("question_text", "")
+    
+    chat_scores = get_chat_scores(chat_id)
+    await update_pin(
+        context.bot,
+        chat_id=chat_id,
+        next_q_num=round_st["q_num"] + 1,
+        scores_dict=chat_scores,
+        new_question_summary=q_text
+    )
+    
+    izoh_formatted = format_izoh_block(explanation, detailed)
+    reply = (
+        f"⏭ <b>SAVOL O'TKAZIB YUBORILDI</b> (Admin tomonidan)\n\n"
+        f"✅ <b>To‘g‘ri javob:</b> {correct_letter}) {escape_tg_html(ans_text)}\n"
+        f"{izoh_formatted}\n\n"
+        f"⏳ Keyingi savol 5 daqiqadan so‘ng yoki /test orqali chiqadi."
+    )
+    await update.message.reply_text(reply, parse_mode="HTML")
+
+async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in GROUP_CHAT_IDS:
+        return
+    
+    if not await is_admin(update, context):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        return
+
+    cid = str(chat_id)
+    ALL_SCORES[cid] = {}
+    save_scores()
+    
+    pin = await get_or_create_leaderboard(context.bot, chat_id)
+    q_num, _, _ = parse_pin_data(getattr(pin, "text", "") or "", chat_id)
+    
+    await update_pin(
+        context.bot,
+        chat_id=chat_id,
+        next_q_num=q_num,
+        scores_dict={},
+        new_question_summary=None
+    )
+    
+    await update.message.reply_text("🔄 Ushbu guruh ishtirokchilarining ballari muvaffaqiyatli nollashtirildi!")
+
+async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in GROUP_CHAT_IDS:
+        return
+    if not await is_admin(update, context):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        return
+
+    now = datetime.now(TASHKENT_TZ)
+    minutes_past = now.minute % 5
+    seconds_past = minutes_past * 60 + now.second
+    seconds_to_wait = 300 - seconds_past
+    if seconds_to_wait <= 0:
+        seconds_to_wait = 300
+
+    mins = seconds_to_wait // 60
+    secs = seconds_to_wait % 60
+    
+    is_alive = scheduler_task is not None and not scheduler_task.done()
+    task_status = "🟢 Ishlayapti (Faol)" if is_alive else "🔴 To'xtab qolgan (Xato)"
+
+    round_st = get_round_state(chat_id)
+    msg = (
+        f"🤖 BOT TIZIM HOLATI:\n\n"
+        f"👥 Faol guruhlar soni: {len(GROUP_CHAT_IDS)} ta\n"
+        f"🕒 Toshkent vaqti: {now.strftime('%H:%M:%S')}\n"
+        f"⚙️ Jadval vazifasi (Scheduler): {task_status}\n"
+        f"⏳ Keyingi savolgacha: {mins} daqiqa {secs} soniya\n"
+        f"🎯 Ushbu guruhda faol savol bormi: {'Ha' if round_st['active'] else 'Yo‘q'}\n"
+    )
+    await update.message.reply_text(msg)
+
+async def cmd_cuss(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in GROUP_CHAT_IDS:
+        return
+    if not await is_admin(update, context):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        return
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    if not context.args:
+        warn = await context.bot.send_message(
+            chat_id,
+            "⚠️ <b>Foydalanish:</b> <code>/cuss &lt;so'z&gt;</code>",
+            parse_mode="HTML"
+        )
+        await asyncio.sleep(5)
+        try:
+            await warn.delete()
+        except Exception:
+            pass
+        return
+
+    new_word = context.args[0].strip().lower()
+    CUSTOM_BANNED_WORDS.add(new_word)
+    save_custom_banned()
+
+    global VULGAR_REGEX
+    VULGAR_REGEX = compile_vulgar_regex()
+
+    msg = await context.bot.send_message(
+        chat_id,
+        f"🚫 <b>'{escape_tg_html(new_word)}'</b> so'zi qora ro'yxatga qo'shildi.",
+        parse_mode="HTML"
+    )
+    await asyncio.sleep(6)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+async def cmd_uncuss(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in GROUP_CHAT_IDS:
+        return
+    if not await is_admin(update, context):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        return
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    if not context.args:
+        warn = await context.bot.send_message(
+            chat_id,
+            "⚠️ <b>Foydalanish:</b> <code>/uncuss &lt;so'z&gt;</code>",
+            parse_mode="HTML"
+        )
+        await asyncio.sleep(5)
+        try:
+            await warn.delete()
+        except Exception:
+            pass
+        return
+
+    target_word = context.args[0].strip().lower()
+    if target_word in CUSTOM_BANNED_WORDS:
+        CUSTOM_BANNED_WORDS.remove(target_word)
+        save_custom_banned()
+        global VULGAR_REGEX
+        VULGAR_REGEX = compile_vulgar_regex()
+        text = f"✅ <b>'{escape_tg_html(target_word)}'</b> taqiqdan olib tashlandi."
+    else:
+        text = f"ℹ️ <b>'{escape_tg_html(target_word)}'</b> ro'yxatda topilmadi."
+
+    msg = await context.bot.send_message(chat_id, text, parse_mode="HTML")
+    await asyncio.sleep(6)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+async def cmd_cusslist(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    if chat_id not in GROUP_CHAT_IDS:
+        return
+    if not await is_admin(update, context):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        return
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    if not CUSTOM_BANNED_WORDS:
+        msg_text = "📋 Hozircha qo'shimcha kiritilgan so'zlar yo'q."
+    else:
+        words = ", ".join([f"<code>{escape_tg_html(w)}</code>" for w in sorted(CUSTOM_BANNED_WORDS)])
+        msg_text = f"📋 <b>Qo'shilgan taqiqlangan so'zlar ({len(CUSTOM_BANNED_WORDS)} ta):</b>\n\n{words}"
+
+    msg = await context.bot.send_message(chat_id, msg_text, parse_mode="HTML")
+    await asyncio.sleep(10)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
+# --- Scheduler Task (5-Minute Drops) ---
+scheduler_task = None
+
+async def scheduler(app):
+    while True:
+        try:
+            now = datetime.now(TASHKENT_TZ)
+            minutes_past = now.minute % 5
+            seconds_past = minutes_past * 60 + now.second
+            seconds_to_wait = 300 - seconds_past
+            if seconds_to_wait <= 0:
+                seconds_to_wait = 300
+                
+            logger.info(f"Tashkent time: {now.strftime('%H:%M:%S')}. Next drop in {seconds_to_wait}s.")
+            await asyncio.sleep(seconds_to_wait)
+            
+            await post_hourly_question(app)
+            await asyncio.sleep(5)
+            
+        except Exception as e:
+            logger.error(f"Scheduler error caught (loop protected): {e}", exc_info=True)
+            await asyncio.sleep(10)
+
+async def on_startup(app):
+    global scheduler_task
+    scheduler_task = asyncio.create_task(scheduler(app))
+
+# --- Main Startup ---
+if __name__ == "__main__":
+    threading.Thread(target=run_web_server, daemon=True).start()
+    app = ApplicationBuilder().token(BOT_TOKEN).post_init(on_startup).build()
+    
+    app.add_handler(CommandHandler("test", cmd_test))
+    app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
+    app.add_handler(CommandHandler("myrank", cmd_myrank))
+    app.add_handler(CommandHandler("score", cmd_set_score))
+    app.add_handler(CommandHandler("skip", cmd_skip))
+    app.add_handler(CommandHandler("reset", cmd_reset))
+    app.add_handler(CommandHandler("status", cmd_status))
+    app.add_handler(CommandHandler("cuss", cmd_cuss))
+    app.add_handler(CommandHandler("uncuss", cmd_uncuss))
+    app.add_handler(CommandHandler("cusslist", cmd_cusslist))
+    app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
+    
+    app.run_polling()
