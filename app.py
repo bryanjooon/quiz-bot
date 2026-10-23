@@ -39,10 +39,32 @@ CYRILLIC_TO_LATIN = {
     'А': 'A', 'а': 'A',
     'В': 'B', 'в': 'B',
     'С': 'C', 'с': 'C',
-    'D': 'D', 'd': 'D', 'Д': 'D', 'д': 'D'
+    'D': 'D', 'd': 'D', 'Д': 'D', 'd': 'D'
 }
 
 INITIAL_WINDOW_SECONDS = 30
+
+# --- Persistent Scores Storage (Fixes missing players) ---
+SCORES_FILE = "scores.json"
+ALL_SCORES = {}
+
+def load_scores():
+    global ALL_SCORES
+    if os.path.exists(SCORES_FILE):
+        try:
+            with open(SCORES_FILE, "r", encoding="utf-8") as f:
+                ALL_SCORES = json.load(f)
+        except Exception as e:
+            logger.error(f"Error loading scores.json: {e}")
+
+def save_scores():
+    try:
+        with open(SCORES_FILE, "w", encoding="utf-8") as f:
+            json.dump(ALL_SCORES, f, ensure_ascii=False, indent=2)
+    except Exception as e:
+        logger.error(f"Error saving scores.json: {e}")
+
+load_scores()
 
 # --- Vulgarity, Harassment & Profanity Filter ---
 VULGAR_PATTERNS = [
@@ -111,32 +133,41 @@ def is_vulgar(text: str) -> bool:
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
 TOPIC_POOLS = [
-    # Mantiq, Tanqidiy Fikr va Mitiy Ko'nikmalar
-    "Mantiq va Deduksiya: Detektiv jumboqlar, chalkash mantiqiy masalalar va jinoyat izlarini topish",
-    "Sog'lom Fikr va Tanqidiy Fikrlash: Kundalik hayotdagi mantiqiy xatolar va manipulyatsiyalardan himoyalanish",
-    "Kognitiv Ko meva va Fikr Aniqligi: Qaror qabul qilishdagi tuzoqlar va chalg'ituvchi ma'lumotlarni saralash",
-    "Mantiqiy Boshqotirmalar: Fikrni charxlaydigan paradokslar, vaziyatli masalalar va strategik fikrlash",
-
-    # Siyosat va Haqiqiy Muhim Tarix
-    "Amaliy Siyosat va Jamiyat: Dunyo qanday boshqariladi, davlat tizimlari va xalqaro munosabatlar asoslari",
-    "Dunyoni O'zgartirgan Muhim Tarix: Jamiyat va chegaralarni shakllantirgan eng asosiy burilish nuqtalari",
-    "O'zbekiston Tarixidagi Asosiy Voqealar: Xalqimiz taqdirini belgilab bergan eng muhim davrlar va shaxslar",
-
-    # Falsafa va Dunyoqarash
-    "Hayotiy Falsafa: Yaxshi hayot, axloq va insoniy qadriyatlar haqidagi sodda va foydali falsafiy qarashlar"
+    "O'zbekiston tarixi: Qadimgi Baqtriya, So'g'diyona va Kushonlar davri",
+    "O'zbekiston tarixi: Somoniylar, Qoraxoniylar va Xorazmshohlar davlati",
+    "O'zbekiston tarixi: Amir Temur harbiy yurishlari va diplomatik aloqalari",
+    "O'zbekiston tarixi: Turkiston jadidchilik harakati va 20-asr fojialari",
+    "Jahon tarixi: Qadimgi Mesopotamiya, Bobil va Finikiya sivilizatsiyasi",
+    "Jahon tarixi: Qadimgi Rim senati, imperatorlari va mashhur janglari",
+    "Jahon tarixi: O'rta asrlar Yevropasi, Salib yurishlari va feodalizm",
+    "Jahon tarixi: Birinchi va Ikkinchi jahon urushidagi kam ma'lum burilish nuqtalari",
+    "Astronomiya: Ekzosayyoralar, neytron yulduzlar va pulsar hodisalari",
+    "Astronomiya: Galaktikalar to'qnashuvi, relyikt nurlanish va qora tuynuklar",
+    "Kosmonavtika: Mashhur kosmik zondlar (Voyager, Cassini, James Webb) missiyalari",
+    "Fizika: Nisbiylik nazariyasi, optik hodisalar va yorug'lik tabiati",
+    "Fizika: Termodinamika qonunlari va zamonaviy kvant kashfiyotlari",
+    "Kimyo: Davriy jadvaldagi radioaktiv elementlar va ularning ishlatilishi",
+    "Kimyo: Kundalik hayotdagi g'aroyib kimyoviy reaksiyalar va qotishmalar",
+    "Inson biologiyasi: Neyronlar, gormonlar, miya tuzilishi va qon aylanishi",
+    "Biologiya va Zoologiya: Dengiz tubi (Abissal) mavjudotlari va ularning moslashuvi",
+    "Biologiya va Botanika: Dunyodagi eng zaharli, kamyob va qadimgi o'simliklar",
+    "Geografiya: Dengizga chiqish yo'li yo'q davlatlar, kutilmagan eksklavlar va chegaralar",
+    "Geografiya: Dunyodagi eng xavfli vulqonlar, kanyonlar va tektonik yoriqlar",
+    "Texnologiya: Internet protokollari, kriptografiya va kompyuter tarixi",
+    "Adabiyot: Mumtoz adabiyot durdonalari va jahon falsafasi",
+    "Mantiq va Deduksiya: Detektiv uslubidagi faktlar va chalkash mantiqiy masalalar"
 ]
 
 ISLAMIC_TOPIC_POOLS = [
-    # Har Bir Musulmon Bilishi Kerak Bo'lgan Asoslar
-    "Islomiy Odob va Axloq: Ota-ona, qo'shni, do'stlar bilan muomala va shaxsiy xulq-atvor qoidalari",
-    "Asosiy Islomiy Bilimlar: Iymon va Islom arkonlari, kunlik amallar hamda farz/vojib tushunchalari",
-
-    # Qissalar va Muhim Tarix
-    "Payg'ambarlar Qissalari: Qur'ondagi ibratli hikoyalar, ulardan olinadigan hayotiy saboqlar",
-    "Payg'ambarimiz (s.a.v.) Siyratlari: U zotning hayotlari, axloqlari va odamlar bilan muomala san'ati",
-    "Hadislar, oyatlar",
-    "Islom Tarixidagi Asosiy Voqealar: Sahobalar davri, adolat tizimi va tarixdagi eng muhim burilishlar"
+    "Islom dini va aqoid: Islom va iymon arkonlari, farz va vojib amallar, fiqh asoslari",
+    "Islom tarixi: Payg'ambarimiz Muhammad (s.a.v.) siyratlari — Makka va Madina davri muhim voqealari",
+    "Islom tarixi: Xulafoi Roshidin (Abu Bakr, Umar, Usmon, Ali r.a.) xalifaligi va adolat tizimi",
+    "Islom tarixi: Movarounnahr buyuk muhaddislari (Imom Buxoriy, Imom Termiziy) va fiqh olimlari (Marg'inoniy)",
+    "Islom tarixi: Islom oltin davri, Bag'doddagi 'Baytul-Hikma' akademiyasi va mutafakkirlar merosi",
+    "Islomiy obidalar va geografiya: Ka'ba, Masjidul Aqso, Masjidun Nabaviy va qadimiy islom shaharlari",
+    "Hadis ilmi va Qur'on tarixi: Mushafi Usmoniy jamlanishi va mashhur hadis to'plamlari"
 ]
+
 QUESTION_ANGLES = [
     "Kutilmagan, ko'pchilik noto'g'ri taxmin qiladigan paradoksal fakt",
     "Tarixiy burilish yasagan keskin voqea yoki strategik qaror",
@@ -155,7 +186,7 @@ round_state = {
     "question_text": "",
     "attempted_users": set(),
     "in_initial_window": False,
-    "first_10s_answers": [],
+    "answers": [],
     "message_id": None,
     "base_text": "",
     "answered_names": []
@@ -217,7 +248,6 @@ def parse_pin_data(pin_text):
     q_match = re.search(r"Joriy savol: #(\d+)", pin_text)
     current_q = int(q_match.group(1)) if q_match else 1
     
-    scores = {}
     history = []
     is_history_section = False
     
@@ -227,15 +257,11 @@ def parse_pin_data(pin_text):
             is_history_section = True
             continue
         
-        if not is_history_section:
-            m = re.match(r"^(?:[🥇🥈🥉]|\d+\.)\s*(.+?)\s*—\s*(\d+)\s*ball", line)
-            if m:
-                scores[m.group(1).strip()] = int(m.group(2))
-        else:
+        if is_history_section:
             if line.startswith("•") and "boshlanmoqda" not in line:
                 history.append(line.replace("•", "").strip())
                 
-    return current_q, scores, history
+    return current_q, ALL_SCORES, history
 
 def format_top10_scores(scores_dict):
     if not scores_dict:
@@ -351,10 +377,6 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
     3. Aslo bir xil takroriy gaplar ('bu javobdan ancha yiroq edi' va h.k.) ISHLATMA! Har safar unikal va ijodiy yondash.
     4. Hech qanday sarlavha (masalan: "Roast:", "Losers:") YOZMA! To'g'ridan-to'g'ri birinchi odam/variantdan boshla.
     5. Har bir fikr to'liq va tugallangan nuqta bilan yakunlansin.
-
-    NAMUNA USLUB:
-    "🔥 <b>mukhammad</b>, B variantini tanlab nimani o'yladingiz? Dala mashg'ulotlarining bunga umuman aloqasi yo'q, bu hodisa aslida...
-    🔥 <b>biloliddin</b>, C varianti 'o'lik oqim' degan joyi sizga yoqib qoldimi? Bu umuman boshqa geografik hodisa..."
     """
 
     headers = {
@@ -537,16 +559,15 @@ def fetch_question(q_num, recent_history):
 async def evaluate_initial_window(app, target_q_num: int):
     """Waits full 30 seconds, then awards points and roasts incorrect guessers."""
     await asyncio.sleep(INITIAL_WINDOW_SECONDS)
-    global round_state
+    global round_state, ALL_SCORES
 
     if not round_state["active"] or round_state["q_num"] != target_q_num:
         return
 
     round_state["in_initial_window"] = False
-    answers = round_state["first_10s_answers"]
+    answers = round_state["answers"]
     correct_choice = round_state["correct"]
 
-    # Deduplicate guesses by user ID
     unique_answers = []
     seen_ids = set()
     for ans in answers:
@@ -557,7 +578,6 @@ async def evaluate_initial_window(app, target_q_num: int):
     correct_answers = [ans for ans in unique_answers if ans["choice"] == correct_choice]
     wrong_answers = [ans for ans in unique_answers if ans["choice"] != correct_choice]
 
-    # Group wrong guesses by option
     wrong_grouped = {}
     for ans in wrong_answers:
         letter = ans["choice"]
@@ -570,9 +590,6 @@ async def evaluate_initial_window(app, target_q_num: int):
         round_state["active"] = False
         correct_answers.sort(key=lambda x: x["timestamp"])
 
-        pin = await get_or_create_leaderboard(app.bot)
-        q_num, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
-
         points_map = [10, 5, 3]
         medals = ["🥇", "🥈", "🥉"]
         winners_lines = []
@@ -581,13 +598,15 @@ async def evaluate_initial_window(app, target_q_num: int):
             user = ans["user"]
             name = user.first_name or "O‘yinchi"
             pts = points_map[idx]
-            scores[name] = scores.get(name, 0) + pts
+            ALL_SCORES[name] = ALL_SCORES.get(name, 0) + pts
             winners_lines.append(f"{medals[idx]} {escape_tg_html(name)} — +{pts} ball ({idx + 1}-o‘rin)")
+
+        save_scores()
 
         leaderboard_str = await update_pin(
             app.bot,
-            next_q_num=q_num + 1,
-            scores_dict=scores,
+            next_q_num=target_q_num + 1,
+            scores_dict=ALL_SCORES,
             new_question_summary=round_state["question_text"]
         )
 
@@ -600,7 +619,6 @@ async def evaluate_initial_window(app, target_q_num: int):
         izoh_formatted = format_izoh_block(round_state['explanation'], round_state['detailed_explanation'])
         rating_formatted = format_leaderboard_block(leaderboard_str)
         
-        # Generate witty dynamic roasts for incorrect guesses
         roast_section = generate_dynamic_roast(
             round_state["question_text"],
             round_state["options"],
@@ -624,7 +642,6 @@ async def evaluate_initial_window(app, target_q_num: int):
             parse_mode="HTML"
         )
     else:
-        # Everyone guessed wrong in the initial 30 seconds -> ROAST THEM IMMEDIATELY!
         roast_section = generate_dynamic_roast(
             round_state["question_text"],
             round_state["options"],
@@ -641,9 +658,8 @@ async def evaluate_initial_window(app, target_q_num: int):
 
 # --- Round Engine ---
 async def post_hourly_question(app):
-    global round_state
+    global round_state, ALL_SCORES
 
-    # 1. AUTO-EXPIRE: If previous question was never answered after 5 minutes
     if round_state["active"]:
         round_state["active"] = False
         prev_q_num = round_state["q_num"]
@@ -653,8 +669,7 @@ async def post_hourly_question(app):
         prev_detailed = round_state["detailed_explanation"]
         prev_q_text = round_state["question_text"]
 
-        # Collect and group any incorrect guesses that were made during the round
-        answers = round_state["first_10s_answers"]
+        answers = round_state["answers"]
         unique_answers = []
         seen_ids = set()
         for ans in answers:
@@ -672,13 +687,10 @@ async def post_hourly_question(app):
             wrong_grouped[letter].append(name)
 
         try:
-            pin = await get_or_create_leaderboard(app.bot)
-            curr_q, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
-
-            await update_pin(
+            leaderboard_str = await update_pin(
                 app.bot,
-                next_q_num=curr_q + 1,
-                scores_dict=scores,
+                next_q_num=prev_q_num + 1,
+                scores_dict=ALL_SCORES,
                 new_question_summary=prev_q_text
             )
 
@@ -707,7 +719,6 @@ async def post_hourly_question(app):
         except Exception as e:
             logger.error(f"Error expiring unanswered question: {e}", exc_info=True)
     
-    # 2. Fetch data for the new round
     pin = await get_or_create_leaderboard(app.bot)
     q_num, _, history = parse_pin_data(getattr(pin, "text", "") or "")
     
@@ -721,7 +732,7 @@ async def post_hourly_question(app):
     round_state["detailed_explanation"] = data.get("detailed_explanation", data["explanation"])
     round_state["question_text"] = data["question"]
     round_state["attempted_users"].clear()
-    round_state["first_10s_answers"].clear()
+    round_state["answers"].clear()
     round_state["answered_names"].clear()
     round_state["in_initial_window"] = True
     
@@ -749,14 +760,13 @@ async def post_hourly_question(app):
 
 # --- Message Handler ---
 async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global round_state
+    global round_state, ALL_SCORES
     
     if not update.message or not update.message.text:
         return
 
     text = update.message.text.strip()
 
-    # 1. SILENT PROFANITY CENSOR
     if is_vulgar(text):
         try:
             await update.message.delete()
@@ -776,7 +786,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     user = update.message.from_user
 
-    # Delete answer message immediately to prevent chat spam and copying
     try:
         await context.bot.delete_message(
             chat_id=update.effective_chat.id,
@@ -785,16 +794,13 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Failed to delete user answer message: {e}")
 
-    # Silently ignore repeat attempts
     if user.id in round_state["attempted_users"]:
         return
 
-    # Register player's single attempt
     round_state["attempted_users"].add(user.id)
     user_name = user.first_name or "O‘yinchi"
     round_state["answered_names"].append(user_name)
 
-    # Live-edit the question message to show the list of respondents
     if round_state["message_id"]:
         answered_lines = "\n".join([f"• {escape_tg_html(name)}" for name in round_state["answered_names"]])
         updated_text = (
@@ -815,29 +821,27 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_choice = match.group(1)
     choice = CYRILLIC_TO_LATIN.get(raw_choice, raw_choice).upper()
 
-    # PHASE 1: Collect guesses silently during initial intake window
+    round_state["answers"].append({
+        "user": user,
+        "choice": choice,
+        "timestamp": time.time()
+    })
+
     if round_state["in_initial_window"]:
-        round_state["first_10s_answers"].append({
-            "user": user,
-            "choice": choice,
-            "timestamp": time.time()
-        })
         return
 
-    # PHASE 2: After the intake window has closed (Sudden-Death)
     try:
         if choice == round_state["correct"]:
             round_state["active"] = False
             winner_name = user_name
             
-            pin = await get_or_create_leaderboard(context.bot)
-            curr_q, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
-            scores[winner_name] = scores.get(winner_name, 0) + 10
+            ALL_SCORES[winner_name] = ALL_SCORES.get(winner_name, 0) + 10
+            save_scores()
             
             leaderboard_str = await update_pin(
                 context.bot,
-                next_q_num=curr_q + 1,
-                scores_dict=scores,
+                next_q_num=round_state["q_num"] + 1,
+                scores_dict=ALL_SCORES,
                 new_question_summary=round_state["question_text"]
             )
             
@@ -885,13 +889,9 @@ async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
-    pin = await get_or_create_leaderboard(context.bot)
-    q_num, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
-    body = format_top10_scores(scores)
-    
+    body = format_top10_scores(ALL_SCORES)
     reply = (
-        f"🏆 1 MILLION QUESTIONS · TOP-10 YETAKCHILAR\n"
-        f"Joriy savol: #{q_num:07d}\n\n"
+        f"🏆 1 MILLION QUESTIONS · TOP-10 YETAKCHILAR\n\n"
         f"{body}"
     )
     await update.message.reply_text(reply)
@@ -905,10 +905,7 @@ async def cmd_myrank(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     name = user.first_name or "O‘yinchi"
-    pin = await get_or_create_leaderboard(context.bot)
-    _, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
-
-    sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
+    sorted_scores = sorted(ALL_SCORES.items(), key=lambda x: x[1], reverse=True)
     
     player_rank = None
     player_pts = 0
@@ -937,7 +934,7 @@ async def cmd_myrank(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
 async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    global round_state
+    global round_state, ALL_SCORES
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
     
@@ -959,13 +956,10 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     detailed = round_state["detailed_explanation"]
     q_text = round_state["question_text"]
     
-    pin = await get_or_create_leaderboard(context.bot)
-    curr_q, scores, _ = parse_pin_data(getattr(pin, "text", "") or "")
-    
     await update_pin(
         context.bot,
-        next_q_num=curr_q + 1,
-        scores_dict=scores,
+        next_q_num=round_state["q_num"] + 1,
+        scores_dict=ALL_SCORES,
         new_question_summary=q_text
     )
     
@@ -979,6 +973,7 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(reply, parse_mode="HTML")
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global ALL_SCORES
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
     
@@ -989,6 +984,9 @@ async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
             pass
         return
 
+    ALL_SCORES = {}
+    save_scores()
+    
     pin = await get_or_create_leaderboard(context.bot)
     q_num, _, _ = parse_pin_data(getattr(pin, "text", "") or "")
     
