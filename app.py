@@ -39,12 +39,12 @@ CYRILLIC_TO_LATIN = {
     'А': 'A', 'а': 'A',
     'В': 'B', 'в': 'B',
     'С': 'C', 'с': 'C',
-    'D': 'D', 'd': 'D', 'Д': 'D', 'd': 'D'
+    'D': 'D', 'd': 'D', 'Д': 'D', 'д': 'D'
 }
 
 INITIAL_WINDOW_SECONDS = 30
 
-# --- Persistent Scores Storage (Fixes missing players) ---
+# --- Persistent Scores Storage ---
 SCORES_FILE = "scores.json"
 ALL_SCORES = {}
 
@@ -933,6 +933,90 @@ async def cmd_myrank(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
+async def cmd_set_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Sets a player's score by replying to their message: /score <points>"""
+    if update.effective_chat.id != GROUP_CHAT_ID:
+        return
+    if not await is_admin(update, context):
+        try:
+            await update.message.delete()
+        except Exception:
+            pass
+        return
+
+    try:
+        await update.message.delete()
+    except Exception:
+        pass
+
+    if not update.message.reply_to_message:
+        warn = await context.bot.send_message(
+            GROUP_CHAT_ID,
+            "⚠️ <b>Foydalanish:</b> Biron bir ishtirokchi xabariga javob (reply) berib, <code>/score 118</code> deb yozing.",
+            parse_mode="HTML"
+        )
+        await asyncio.sleep(5)
+        try:
+            await warn.delete()
+        except Exception:
+            pass
+        return
+
+    if not context.args:
+        warn = await context.bot.send_message(
+            GROUP_CHAT_ID,
+            "⚠️ <b>Foydalanish:</b> Ball miqdorini ko'rsating. Masalan: <code>/score 118</code>",
+            parse_mode="HTML"
+        )
+        await asyncio.sleep(5)
+        try:
+            await warn.delete()
+        except Exception:
+            pass
+        return
+
+    try:
+        new_score = int(context.args[0])
+    except ValueError:
+        warn = await context.bot.send_message(
+            GROUP_CHAT_ID,
+            "⚠️ <b>Xatolik:</b> Ball faqat raqamlarda kiritilishi kerak!",
+            parse_mode="HTML"
+        )
+        await asyncio.sleep(5)
+        try:
+            await warn.delete()
+        except Exception:
+            pass
+        return
+
+    target_user = update.message.reply_to_message.from_user
+    target_name = target_user.first_name or "O‘yinchi"
+
+    global ALL_SCORES
+    ALL_SCORES[target_name] = new_score
+    save_scores()
+
+    pin = await get_or_create_leaderboard(context.bot)
+    q_num, _, _ = parse_pin_data(getattr(pin, "text", "") or "")
+    await update_pin(
+        context.bot,
+        next_q_num=q_num,
+        scores_dict=ALL_SCORES,
+        new_question_summary=None
+    )
+
+    msg = await context.bot.send_message(
+        GROUP_CHAT_ID,
+        f"✅ <b>{escape_tg_html(target_name)}</b> ning bali <b>{new_score}</b> deb belgilandi!",
+        parse_mode="HTML"
+    )
+    await asyncio.sleep(6)
+    try:
+        await msg.delete()
+    except Exception:
+        pass
+
 async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     global round_state, ALL_SCORES
     if update.effective_chat.id != GROUP_CHAT_ID:
@@ -1150,94 +1234,6 @@ async def cmd_cusslist(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception:
         pass
 
-        async def cmd_set_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Sets a player's score by replying to their message: /score <points>"""
-    if update.effective_chat.id != GROUP_CHAT_ID:
-        return
-    if not await is_admin(update, context):
-        try:
-            await update.message.delete()
-        except Exception:
-            pass
-        return
-
-    # Delete admin command message to keep chat clean
-    try:
-        await update.message.delete()
-    except Exception:
-        pass
-
-    # Must be used as a reply to the target user
-    if not update.message.reply_to_message:
-        warn = await context.bot.send_message(
-            GROUP_CHAT_ID,
-            "⚠️ <b>Foydalanish:</b> Biron bir ishtirokchi xabariga javob (reply) berib, <code>/score 118</code> deb yozing.",
-            parse_mode="HTML"
-        )
-        await asyncio.sleep(5)
-        try:
-            await warn.delete()
-        except Exception:
-            pass
-        return
-
-    if not context.args:
-        warn = await context.bot.send_message(
-            GROUP_CHAT_ID,
-            "⚠️ <b>Foydalanish:</b> Ball miqdorini ko'rsating. Masalan: <code>/score 118</code>",
-            parse_mode="HTML"
-        )
-        await asyncio.sleep(5)
-        try:
-            await warn.delete()
-        except Exception:
-            pass
-        return
-
-    try:
-        new_score = int(context.args[0])
-    except ValueError:
-        warn = await context.bot.send_message(
-            GROUP_CHAT_ID,
-            "⚠️ <b>Xatolik:</b> Ball faqat raqamlarda kiritilishi kerak!",
-            parse_mode="HTML"
-        )
-        await asyncio.sleep(5)
-        try:
-            await warn.delete()
-        except Exception:
-            pass
-        return
-
-    target_user = update.message.reply_to_message.from_user
-    target_name = target_user.first_name or "O‘yinchi"
-
-    # Update scores in memory & scores.json
-    global ALL_SCORES
-    ALL_SCORES[target_name] = new_score
-    save_scores()
-
-    # Update pinned leaderboard
-    pin = await get_or_create_leaderboard(context.bot)
-    q_num, _, _ = parse_pin_data(getattr(pin, "text", "") or "")
-    await update_pin(
-        context.bot,
-        next_q_num=q_num,
-        scores_dict=ALL_SCORES,
-        new_question_summary=None
-    )
-
-    msg = await context.bot.send_message(
-        GROUP_CHAT_ID,
-        f"✅ <b>{escape_tg_html(target_name)}</b> ning bali <b>{new_score}</b> deb belgilandi!",
-        parse_mode="HTML"
-    )
-    await asyncio.sleep(6)
-    try:
-        await msg.delete()
-    except Exception:
-        pass
-
 # --- Scheduler Task (5-Minute Drops) ---
 scheduler_task = None
 
@@ -1273,6 +1269,7 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("test", cmd_test))
     app.add_handler(CommandHandler("leaderboard", cmd_leaderboard))
     app.add_handler(CommandHandler("myrank", cmd_myrank))
+    app.add_handler(CommandHandler("score", cmd_set_score))
     app.add_handler(CommandHandler("skip", cmd_skip))
     app.add_handler(CommandHandler("reset", cmd_reset))
     app.add_handler(CommandHandler("status", cmd_status))
@@ -1280,6 +1277,5 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("uncuss", cmd_uncuss))
     app.add_handler(CommandHandler("cusslist", cmd_cusslist))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
-    app.add_handler(CommandHandler("score", cmd_set_score))
     
     app.run_polling()
