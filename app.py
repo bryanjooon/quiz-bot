@@ -32,7 +32,6 @@ GROQ_API_KEY = os.getenv("GROQ_API_KEY")
 PORT = int(os.environ.get("PORT", 10000))
 TASHKENT_TZ = pytz.timezone("Asia/Tashkent")
 
-# Support comma-separated Group IDs or fallback single ID
 raw_ids = os.getenv("TELEGRAM_GROUP_IDS", os.getenv("TELEGRAM_GROUP_ID", "0"))
 GROUP_CHAT_IDS = [int(i.strip()) for i in raw_ids.split(",") if i.strip() and i.strip() != "0"]
 
@@ -46,8 +45,6 @@ CYRILLIC_TO_LATIN = {
 }
 
 INITIAL_WINDOW_SECONDS = 30
-
-# Name of global player whose score syncs across all groups
 GLOBAL_USER_NAME = "biloliddin"
 
 # --- Persistent Scores Storage per Chat ID ---
@@ -79,35 +76,13 @@ def get_chat_scores(chat_id: int) -> dict:
     return ALL_SCORES[cid]
 
 def update_player_score(chat_id: int, player_name: str, pts_to_add: int) -> int:
-    """Updates score locally, and syncs globally if the player is GLOBAL_USER_NAME."""
-    cid = str(chat_id)
     chat_dict = get_chat_scores(chat_id)
-    
-    # Update local score
     new_score = chat_dict.get(player_name, 0) + pts_to_add
     chat_dict[player_name] = new_score
-
-    # Global sync for biloliddin across all groups
-    if player_name.lower() == GLOBAL_USER_NAME.lower():
-        # Find maximum existing score across any chat
-        max_global = new_score
-        for c_key, c_scores in ALL_SCORES.items():
-            for p_key, p_val in c_scores.items():
-                if p_key.lower() == GLOBAL_USER_NAME.lower() and p_val > max_global:
-                    max_global = p_val
-        
-        # Apply synced score to all groups
-        for c_key in ALL_SCORES.keys():
-            for p_key in list(ALL_SCORES[c_key].keys()):
-                if p_key.lower() == GLOBAL_USER_NAME.lower():
-                    ALL_SCORES[c_key][p_key] = max_global
-            if GLOBAL_USER_NAME not in ALL_SCORES[c_key]:
-                ALL_SCORES[c_key][GLOBAL_USER_NAME] = max_global
-
     save_scores()
     return chat_dict[player_name]
 
-# --- Vulgarity, Harassment & Profanity Filter ---
+# --- Vulgarity & Profanity Filter ---
 VULGAR_PATTERNS = [
     r"fuck\w*", r"shit\w*", r"bitch\w*", r"asshole\w*", r"bastard\w*", r"cunt\w*",
     r"dick\w*", r"pussy\w*", r"rape\w*", r"rapis\w*", r"slut\w*", r"whore\w*",
@@ -234,14 +209,14 @@ def create_empty_round():
         "answered_names": []
     }
 
-ROUND_STATES = {}  # { chat_id: round_state_dict }
+ROUND_STATES = {}
 
 def get_round_state(chat_id: int) -> dict:
     if chat_id not in ROUND_STATES:
         ROUND_STATES[chat_id] = create_empty_round()
     return ROUND_STATES[chat_id]
 
-# --- Keep-Alive Web Server for Render ---
+# --- Keep-Alive Web Server ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
         self.send_response(200)
@@ -607,7 +582,6 @@ def fetch_question(q_num, recent_history):
 
 # --- Intake Window Evaluator per Group ---
 async def evaluate_initial_window(app, chat_id: int, target_q_num: int):
-    """Waits 30s, evaluates answers locally for the specific group, and awards points."""
     await asyncio.sleep(INITIAL_WINDOW_SECONDS)
     round_st = get_round_state(chat_id)
 
@@ -712,7 +686,6 @@ async def post_hourly_question(app):
         round_st = get_round_state(chat_id)
         chat_scores = get_chat_scores(chat_id)
 
-        # 1. AUTO-EXPIRE: If previous question was never answered in this group after 5 mins
         if round_st["active"]:
             round_st["active"] = False
             prev_q_num = round_st["q_num"]
@@ -773,14 +746,12 @@ async def post_hourly_question(app):
             except Exception as e:
                 logger.error(f"Error expiring unanswered question in {chat_id}: {e}", exc_info=True)
 
-    # 2. Fetch one central question for all groups
     sample_chat = GROUP_CHAT_IDS[0] if GROUP_CHAT_IDS else 0
     pin = await get_or_create_leaderboard(app.bot, sample_chat)
     q_num, _, history = parse_pin_data(getattr(pin, "text", "") or "", sample_chat)
     
     data = fetch_question(q_num, history)
 
-    # 3. Post to all registered groups independently
     for chat_id in GROUP_CHAT_IDS:
         round_st = get_round_state(chat_id)
         
@@ -856,84 +827,90 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Failed to delete user answer message: {e}")
 
-    if user.id in round_st["attempted_users"]:
-        return
-
-    round_st["attempted_users"].add(user.id)
     user_name = user.first_name or "O‘yinchi"
-    round_st["answered_names"].append(user_name)
-
-    if round_st["message_id"]:
-        answered_lines = "\n".join([f"• {escape_tg_html(name)}" for name in round_st["answered_names"]])
-        updated_text = (
-            f"{round_st['base_text']}\n\n"
-            f"👥 <b>Javob berganlar ({len(round_st['answered_names'])}):</b>\n"
-            f"{answered_lines}"
-        )
-        try:
-            await context.bot.edit_message_text(
-                chat_id=chat_id,
-                message_id=round_st["message_id"],
-                text=updated_text,
-                parse_mode="HTML"
-            )
-        except Exception as e:
-            logger.warning(f"Could not update question message: {e}")
-
     raw_choice = match.group(1)
     choice = CYRILLIC_TO_LATIN.get(raw_choice, raw_choice).upper()
 
-    round_st["answers"].append({
-        "user": user,
-        "choice": choice,
-        "timestamp": time.time()
-    })
+    # Mirroring for biloliddin across both groups, else local chat
+    target_chats = GROUP_CHAT_IDS if user_name.lower() == GLOBAL_USER_NAME.lower() else [chat_id]
 
-    if round_st["in_initial_window"]:
-        return
+    for target_cid in target_chats:
+        target_round = get_round_state(target_cid)
+        if not target_round["active"]:
+            continue
 
-    try:
-        if choice == round_st["correct"]:
-            round_st["active"] = False
-            winner_name = user_name
-            
-            update_player_score(chat_id, winner_name, 10)
-            chat_scores = get_chat_scores(chat_id)
-            
-            leaderboard_str = await update_pin(
-                context.bot,
-                chat_id=chat_id,
-                next_q_num=round_st["q_num"] + 1,
-                scores_dict=chat_scores,
-                new_question_summary=round_st["question_text"]
+        if user.id in target_round["attempted_users"]:
+            continue
+
+        target_round["attempted_users"].add(user.id)
+        target_round["answered_names"].append(user_name)
+
+        target_round["answers"].append({
+            "user": user,
+            "choice": choice,
+            "timestamp": time.time()
+        })
+
+        if target_round["message_id"]:
+            answered_lines = "\n".join([f"• {escape_tg_html(n)}" for n in target_round["answered_names"]])
+            updated_text = (
+                f"{target_round['base_text']}\n\n"
+                f"👥 <b>Javob berganlar ({len(target_round['answered_names'])}):</b>\n"
+                f"{answered_lines}"
             )
-            
-            correct_letter = round_st["correct"]
-            ans_text = round_st["options"].get(correct_letter, "")
-            
-            izoh_formatted = format_izoh_block(round_st['explanation'], round_st['detailed_explanation'])
-            rating_formatted = format_leaderboard_block(leaderboard_str)
+            try:
+                await context.bot.edit_message_text(
+                    chat_id=target_cid,
+                    message_id=target_round["message_id"],
+                    text=updated_text,
+                    parse_mode="HTML"
+                )
+            except Exception as e:
+                logger.warning(f"Could not update question message in {target_cid}: {e}")
 
-            reply = (
-                f"🎯 <b>TO‘G‘RI JAVOB!</b>\n\n"
-                f"⚡ <b>G‘olib:</b> {escape_tg_html(winner_name)} (+10 ball!)\n"
-                f"✅ <b>Javob:</b> {correct_letter}) {escape_tg_html(ans_text)}\n"
-                f"{izoh_formatted}\n\n"
-                f"{rating_formatted}\n\n"
-                f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
-            )
-            
-            kwargs = {"parse_mode": "HTML"}
-            if update.message.message_thread_id:
-                kwargs["message_thread_id"] = update.message.message_thread_id
+        if not target_round["in_initial_window"]:
+            try:
+                if choice == target_round["correct"]:
+                    target_round["active"] = False
+                    winner_name = user_name
+                    
+                    update_player_score(target_cid, winner_name, 10)
+                    chat_scores = get_chat_scores(target_cid)
+                    
+                    leaderboard_str = await update_pin(
+                        context.bot,
+                        chat_id=target_cid,
+                        next_q_num=target_round["q_num"] + 1,
+                        scores_dict=chat_scores,
+                        new_question_summary=target_round["question_text"]
+                    )
+                    
+                    correct_letter = target_round["correct"]
+                    ans_text = target_round["options"].get(correct_letter, "")
+                    
+                    izoh_formatted = format_izoh_block(target_round['explanation'], target_round['detailed_explanation'])
+                    rating_formatted = format_leaderboard_block(leaderboard_str)
 
-            await context.bot.send_message(
-                chat_id, 
-                reply, 
-                **kwargs
-            )
-    except Exception as e:
-        logger.error(f"Error handling sudden death answer in {chat_id}: {e}", exc_info=True)
+                    reply = (
+                        f"🎯 <b>TO‘G‘RI JAVOB!</b>\n\n"
+                        f"⚡ <b>G‘olib:</b> {escape_tg_html(winner_name)} (+10 ball!)\n"
+                        f"✅ <b>Javob:</b> {correct_letter}) {escape_tg_html(ans_text)}\n"
+                        f"{izoh_formatted}\n\n"
+                        f"{rating_formatted}\n\n"
+                        f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
+                    )
+                    
+                    kwargs = {"parse_mode": "HTML"}
+                    if update.message.message_thread_id:
+                        kwargs["message_thread_id"] = update.message.message_thread_id
+
+                    await context.bot.send_message(
+                        target_cid, 
+                        reply, 
+                        **kwargs
+                    )
+            except Exception as e:
+                logger.error(f"Error handling sudden death answer in {target_cid}: {e}", exc_info=True)
 
 # --- Commands ---
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1063,12 +1040,7 @@ async def cmd_set_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     chat_scores = get_chat_scores(chat_id)
     chat_scores[target_name] = new_score
-    
-    # Sync if biloliddin
-    if target_name.lower() == GLOBAL_USER_NAME.lower():
-        update_player_score(chat_id, target_name, 0)
-    else:
-        save_scores()
+    save_scores()
 
     pin = await get_or_create_leaderboard(context.bot, chat_id)
     q_num, _, _ = parse_pin_data(getattr(pin, "text", "") or "", chat_id)
@@ -1312,7 +1284,7 @@ async def cmd_cusslist(update: Update, context: ContextTypes.DEFAULT_TYPE):
         words = ", ".join([f"<code>{escape_tg_html(w)}</code>" for w in sorted(CUSTOM_BANNED_WORDS)])
         msg_text = f"📋 <b>Qo'shilgan taqiqlangan so'zlar ({len(CUSTOM_BANNED_WORDS)} ta):</b>\n\n{words}"
 
-    msg = await context.bot.send_message(chat_id, msg_text, parse_mode="HTML")
+    msg = await context.bot.send_message(chat_id, text=msg_text, parse_mode="HTML")
     await asyncio.sleep(10)
     try:
         await msg.delete()
