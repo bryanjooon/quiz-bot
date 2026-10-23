@@ -237,7 +237,6 @@ def parse_pin_data(pin_text):
             continue
         
         if not is_history_section:
-            # Matches any rank format (medals or digits) and extracts full player name + score
             m = re.match(r"^(?:[🥇🥈🥉]|\d+\.)\s*(.+?)\s*—\s*(\d+)\s*ball", line)
             if m:
                 scores[m.group(1).strip()] = int(m.group(2))
@@ -333,9 +332,6 @@ def get_grade_info(q_num: int):
 
 # --- Groq Dynamic Roast Generator ---
 def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses_grouped):
-    """
-    Sends wrong guesses to Groq to generate dynamic, individual, witty, and educational roasts.
-    """
     if not wrong_guesses_grouped:
         return ""
 
@@ -637,22 +633,21 @@ async def evaluate_initial_window(app, target_q_num: int):
             parse_mode="HTML"
         )
     else:
-        if answers:
-            roast_section = generate_dynamic_roast(
-                round_state["question_text"],
-                round_state["options"],
-                correct_choice,
-                wrong_grouped
-            )
-            await app.bot.send_message(
-                GROUP_CHAT_ID,
-                f"⏳ <b>30 soniya o‘tdi, ammo biror kishi ham to‘g‘ri topolmadi!</b>"
-                f"{roast_section}\n\n"
-                f"🔥 O‘yin davom etadi — endi kim birinchi to‘g‘ri topsa, to‘liq 10 ball oladi!",
-                parse_mode="HTML"
-            )
+        # Everyone guessed wrong in the initial 30 seconds -> ROAST THEM IMMEDIATELY!
+        roast_section = generate_dynamic_roast(
+            round_state["question_text"],
+            round_state["options"],
+            correct_choice,
+            wrong_grouped
+        )
+        await app.bot.send_message(
+            GROUP_CHAT_ID,
+            f"⏳ <b>30 soniya o‘tdi, ammo biror kishi ham to‘g‘ri topolmadi!</b>"
+            f"{roast_section}\n\n"
+            f"🔥 O‘yin davom etadi — endi kim birinchi to‘g‘ri topsa, to‘liq 10 ball oladi!",
+            parse_mode="HTML"
+        )
 
-# --- Round Engine ---
 # --- Round Engine ---
 async def post_hourly_question(app):
     global round_state
@@ -667,7 +662,7 @@ async def post_hourly_question(app):
         prev_detailed = round_state["detailed_explanation"]
         prev_q_text = round_state["question_text"]
 
-        # Collect and group any incorrect guesses that were made during the 5 minutes
+        # Collect and group any incorrect guesses that were made during the round
         answers = round_state["first_10s_answers"]
         unique_answers = []
         seen_ids = set()
@@ -697,8 +692,6 @@ async def post_hourly_question(app):
             )
 
             izoh_formatted = format_izoh_block(prev_expl, prev_detailed)
-            
-            # Generate roast for anyone who guessed wrong before the 5-minute timeout
             roast_section = generate_dynamic_roast(
                 prev_q_text,
                 round_state["options"],
@@ -913,7 +906,6 @@ async def cmd_leaderboard(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(reply)
 
 async def cmd_myrank(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Allows any player to check their exact rank and total points."""
     if update.effective_chat.id != GROUP_CHAT_ID:
         return
 
@@ -942,7 +934,7 @@ async def cmd_myrank(update: Update, context: ContextTypes.DEFAULT_TYPE):
         pass
 
     if player_rank:
-        text = f"👤 <b>{escape_tg_html(name)}</b>ning natijasi:\n🏆 Urinish: #{player_rank}-o'rin | ⭐️ Ball: {player_pts} ball"
+        text = f"👤 <b>{escape_tg_html(name)}</b>ning natijasi:\n🏆 O'rin: #{player_rank}-o'rin | ⭐️ Ball: {player_pts} ball"
     else:
         text = f"👤 <b>{escape_tg_html(name)}</b>, sizda hali to'plangan ballar yo'q! Birinchi bo'lib to'g'ri javob bering va ochko oling!"
 
