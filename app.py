@@ -111,41 +111,32 @@ def is_vulgar(text: str) -> bool:
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
 TOPIC_POOLS = [
-    "O'zbekiston tarixi: Qadimgi Baqtriya, So'g'diyona va Kushonlar davri",
-    "O'zbekiston tarixi: Somoniylar, Qoraxoniylar va Xorazmshohlar davlati",
-    "O'zbekiston tarixi: Amir Temur harbiy yurishlari va diplomatik aloqalari",
-    "O'zbekiston tarixi: Turkiston jadidchilik harakati va 20-asr fojialari",
-    "Jahon tarixi: Qadimgi Mesopotamiya, Bobil va Finikiya sivilizatsiyasi",
-    "Jahon tarixi: Qadimgi Rim senati, imperatorlari va mashhur janglari",
-    "Jahon tarixi: O'rta asrlar Yevropasi, Salib yurishlari va feodalizm",
-    "Jahon tarixi: Birinchi va Ikkinchi jahon urushidagi kam ma'lum burilish nuqtalari",
-    "Astronomiya: Ekzosayyoralar, neytron yulduzlar va pulsar hodisalari",
-    "Astronomiya: Galaktikalar to'qnashuvi, relyikt nurlanish va qora tuynuklar",
-    "Kosmonavtika: Mashhur kosmik zondlar (Voyager, Cassini, James Webb) missiyalari",
-    "Fizika: Nisbiylik nazariyasi, optik hodisalar va yorug'lik tabiati",
-    "Fizika: Termodinamika qonunlari va zamonaviy kvant kashfiyotlari",
-    "Kimyo: Davriy jadvaldagi radioaktiv elementlar va ularning ishlatilishi",
-    "Kimyo: Kundalik hayotdagi g'aroyib kimyoviy reaksiyalar va qotishmalar",
-    "Inson biologiyasi: Neyronlar, gormonlar, miya tuzilishi va qon aylanishi",
-    "Biologiya va Zoologiya: Dengiz tubi (Abissal) mavjudotlari va ularning moslashuvi",
-    "Biologiya va Botanika: Dunyodagi eng zaharli, kamyob va qadimgi o'simliklar",
-    "Geografiya: Dengizga chiqish yo'li yo'q davlatlar, kutilmagan eksklavlar va chegaralar",
-    "Geografiya: Dunyodagi eng xavfli vulqonlar, kanyonlar va tektonik yoriqlar",
-    "Texnologiya: Internet protokollari, kriptografiya va kompyuter tarixi",
-    "Adabiyot: Mumtoz adabiyot durdonalari va jahon falsafasi",
-    "Mantiq va Deduksiya: Detektiv uslubidagi faktlar va chalkash mantiqiy masalalar"
+    # Mantiq, Tanqidiy Fikr va Mitiy Ko'nikmalar
+    "Mantiq va Deduksiya: Detektiv jumboqlar, chalkash mantiqiy masalalar va jinoyat izlarini topish",
+    "Sog'lom Fikr va Tanqidiy Fikrlash: Kundalik hayotdagi mantiqiy xatolar va manipulyatsiyalardan himoyalanish",
+    "Kognitiv Ko meva va Fikr Aniqligi: Qaror qabul qilishdagi tuzoqlar va chalg'ituvchi ma'lumotlarni saralash",
+    "Mantiqiy Boshqotirmalar: Fikrni charxlaydigan paradokslar, vaziyatli masalalar va strategik fikrlash",
+
+    # Siyosat va Haqiqiy Muhim Tarix
+    "Amaliy Siyosat va Jamiyat: Dunyo qanday boshqariladi, davlat tizimlari va xalqaro munosabatlar asoslari",
+    "Dunyoni O'zgartirgan Muhim Tarix: Jamiyat va chegaralarni shakllantirgan eng asosiy burilish nuqtalari",
+    "O'zbekiston Tarixidagi Asosiy Voqealar: Xalqimiz taqdirini belgilab bergan eng muhim davrlar va shaxslar",
+
+    # Falsafa va Dunyoqarash
+    "Hayotiy Falsafa: Yaxshi hayot, axloq va insoniy qadriyatlar haqidagi sodda va foydali falsafiy qarashlar"
 ]
 
 ISLAMIC_TOPIC_POOLS = [
-    "Islom dini va aqoid: Islom va iymon arkonlari, farz va vojib amallar, fiqh asoslari",
-    "Islom tarixi: Payg'ambarimiz Muhammad (s.a.v.) siyratlari — Makka va Madina davri muhim voqealari",
-    "Islom tarixi: Xulafoi Roshidin (Abu Bakr, Umar, Usmon, Ali r.a.) xalifaligi va adolat tizimi",
-    "Islom tarixi: Movarounnahr buyuk muhaddislari (Imom Buxoriy, Imom Termiziy) va fiqh olimlari (Marg'inoniy)",
-    "Islom tarixi: Islom oltin davri, Bag'doddagi 'Baytul-Hikma' akademiyasi va mutafakkirlar merosi",
-    "Islomiy obidalar va geografiya: Ka'ba, Masjidul Aqso, Masjidun Nabaviy va qadimiy islom shaharlari",
-    "Hadis ilmi va Qur'on tarixi: Mushafi Usmoniy jamlanishi va mashhur hadis to'plamlari"
-]
+    # Har Bir Musulmon Bilishi Kerak Bo'lgan Asoslar
+    "Islomiy Odob va Axloq: Ota-ona, qo'shni, do'stlar bilan muomala va shaxsiy xulq-atvor qoidalari",
+    "Asosiy Islomiy Bilimlar: Iymon va Islom arkonlari, kunlik amallar hamda farz/vojib tushunchalari",
 
+    # Qissalar va Muhim Tarix
+    "Payg'ambarlar Qissalari: Qur'ondagi ibratli hikoyalar, ulardan olinadigan hayotiy saboqlar",
+    "Payg'ambarimiz (s.a.v.) Siyratlari: U zotning hayotlari, axloqlari va odamlar bilan muomala san'ati",
+    "Hadislar, oyatlar",
+    "Islom Tarixidagi Asosiy Voqealar: Sahobalar davri, adolat tizimi va tarixdagi eng muhim burilishlar"
+]
 QUESTION_ANGLES = [
     "Kutilmagan, ko'pchilik noto'g'ri taxmin qiladigan paradoksal fakt",
     "Tarixiy burilish yasagan keskin voqea yoki strategik qaror",
