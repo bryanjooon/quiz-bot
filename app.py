@@ -45,7 +45,7 @@ CYRILLIC_TO_LATIN = {
 }
 
 INITIAL_WINDOW_SECONDS = 30
-EXPIRE_CLEANUP_SECONDS = 600  # 10 minutes cleanup window
+EXPIRE_CLEANUP_SECONDS = 600  # 10 minutes
 GLOBAL_USER_NAME = "biloliddin"
 
 # --- Persistent Scores Storage per Chat ID ---
@@ -97,6 +97,36 @@ def update_player_score(chat_id: int, player_name: str, pts_to_add: int) -> int:
 
     save_scores()
     return chat_dict[player_name]
+
+# --- Message Cleanup Sweeper ---
+MESSAGES_TO_PURGE = []
+
+def track_for_cleanup(chat_id: int, message_id: int, delay_seconds: int = EXPIRE_CLEANUP_SECONDS):
+    if message_id:
+        MESSAGES_TO_PURGE.append({
+            "chat_id": chat_id,
+            "message_id": message_id,
+            "delete_at": time.time() + delay_seconds
+        })
+
+async def message_cleaner_task(bot):
+    while True:
+        try:
+            now = time.time()
+            remaining = []
+            for item in MESSAGES_TO_PURGE:
+                if now >= item["delete_at"]:
+                    try:
+                        await bot.delete_message(chat_id=item["chat_id"], message_id=item["message_id"])
+                        logger.info(f"Cleaned up message {item['message_id']} in chat {item['chat_id']}")
+                    except Exception as e:
+                        logger.warning(f"Failed to delete message {item['message_id']} in {item['chat_id']}: {e}")
+                else:
+                    remaining.append(item)
+            MESSAGES_TO_PURGE[:] = remaining
+        except Exception as e:
+            logger.error(f"Error in cleaner loop: {e}")
+        await asyncio.sleep(15)
 
 # --- Vulgarity & Profanity Filter ---
 VULGAR_PATTERNS = [
@@ -219,17 +249,6 @@ def get_round_state(chat_id: int) -> dict:
         ROUND_STATES[chat_id] = create_empty_round()
     return ROUND_STATES[chat_id]
 
-# --- Message Expiration Cleanup Helper ---
-async def schedule_round_cleanup(bot, chat_id: int, message_ids: list):
-    """Deletes specified messages after EXPIRE_CLEANUP_SECONDS (10 minutes)."""
-    await asyncio.sleep(EXPIRE_CLEANUP_SECONDS)
-    for mid in message_ids:
-        if mid:
-            try:
-                await bot.delete_message(chat_id=chat_id, message_id=mid)
-            except Exception:
-                pass
-
 # --- Keep-Alive Web Server ---
 class HealthHandler(BaseHTTPRequestHandler):
     def do_GET(self):
@@ -256,10 +275,10 @@ async def is_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> bool:
         member = await context.bot.get_chat_member(chat_id, user.id)
         return member.status in ["creator", "administrator"]
     except Exception as e:
-        logger.error(f"Error verifying admin status: {e}")
+        logger.error(f"Error verifying admin status in {chat_id}: {e}")
         return False
 
-# --- Pinned Storage Helpers per Group ---
+# --- Pinned Storage Helpers with Auto-Recovery ---
 async def get_or_create_leaderboard(bot, chat_id: int):
     chat = await bot.get_chat(chat_id)
     pinned = chat.pinned_message
@@ -289,6 +308,7 @@ def parse_pin_data(pin_text, chat_id: int):
     
     history = []
     is_history_section = False
+    recovered_scores = {}
     
     for line in pin_text.split("\n"):
         line = line.strip()
@@ -296,11 +316,21 @@ def parse_pin_data(pin_text, chat_id: int):
             is_history_section = True
             continue
         
-        if is_history_section:
+        if not is_history_section:
+            m = re.match(r"^(?:[🥇🥈🥉]|\d+\.)\s*(.+?)\s*—\s*(\d+)\s*ball", line)
+            if m:
+                recovered_scores[m.group(1).strip()] = int(m.group(2))
+        else:
             if line.startswith("•") and "boshlanmoqda" not in line:
                 history.append(line.replace("•", "").strip())
+
+    chat_scores = get_chat_scores(chat_id)
+    for p_name, p_pts in recovered_scores.items():
+        if p_name not in chat_scores or chat_scores[p_name] < p_pts:
+            chat_scores[p_name] = p_pts
+    save_scores()
                 
-    return current_q, get_chat_scores(chat_id), history
+    return current_q, chat_scores, history
 
 def format_top10_scores(scores_dict):
     if not scores_dict:
@@ -316,14 +346,19 @@ def format_top10_scores(scores_dict):
 async def update_pin(bot, chat_id: int, next_q_num, scores_dict, new_question_summary=None):
     try:
         pin = await get_or_create_leaderboard(bot, chat_id)
-        _, _, history = parse_pin_data(getattr(pin, "text", "") or "", chat_id)
+        _, latest_scores, history = parse_pin_data(getattr(pin, "text", "") or "", chat_id)
         
+        merged_scores = dict(latest_scores)
+        for k, v in scores_dict.items():
+            if k not in merged_scores or v > merged_scores[k]:
+                merged_scores[k] = v
+
         if new_question_summary:
             clean_summary = new_question_summary.replace("\n", " ").strip()[:90]
             history.insert(0, clean_summary)
             history = history[:15]
             
-        scores_body = format_top10_scores(scores_dict)
+        scores_body = format_top10_scores(merged_scores)
         history_lines = [f"• {item}" for item in history] if history else ["• Savollar tarixi boshlanmoqda..."]
         history_body = "\n".join(history_lines)
         
@@ -396,12 +431,10 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
         return ""
 
     correct_text = options.get(correct_letter, "")
-    
     wrong_block = []
     for letter, names in wrong_guesses_grouped.items():
         opt_text = options.get(letter, "")
         wrong_block.append(f"- Variant {letter}) '{opt_text}': {', '.join(names)}")
-    
     wrong_str = "\n".join(wrong_block)
 
     prompt = f"""
@@ -442,7 +475,6 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
             "temperature": 0.85,
             "max_tokens": 700
         }
-
         try:
             res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=20)
             data = res.json()
@@ -481,7 +513,7 @@ OFFLINE_BACKUP_QUESTIONS = [
         },
         "correct": "B",
         "explanation": "Amir Temur Sharl VI va Genrix IV ga yo'llagan maktublarida xalqaro savdo xavfsizligini ta'minlashni asosiy prioritet qilib qo'ygan.",
-        "detailed_explanation": "Amir Temur va Yevropa hukmdorlari o'rtasidagi yozishmalar asosan Ipak yo'lining g'arbiy va sharqiy tarmoqlarida savdo xavfsizligini o'rnatisga qaratilgan edi. U savdogarlarga bojxona imtiyozlari berilishini ta'minlagan.",
+        "detailed_explanation": "Amir Temur va Yevropa hukmdorlari o'rtasidagi yozishmalar asosan Ipak yo'lining g'arbiy va sharqiy tarmoqlarida savdo xavfsizligini o'rnatishga qaratilgan edi. U savdogarlarga bojxona imtiyozlari berilishini ta'minlagan.",
         "source": "Fransiya Qirollik Arxivi (Archives Nationales) — Temur va Sharl VI maktublari"
     },
     {
@@ -489,9 +521,9 @@ OFFLINE_BACKUP_QUESTIONS = [
         "question": "Nima uchun neytron yulduzlarning aylanish tezligi uning radiusi qisqargan sari keskin ortib boradi?",
         "options": {
             "A": "Magnit maydoni kuchayishi natijasida",
-            "B": "Kinetik impuls impuls momentsiyaning saqlanish qonuniga ko'ra",
+            "B": "Impuls momentining saqlanish qonuniga ko'ra",
             "C": "Termoyadroviy reaksiyalar to'xtashi sababli",
-            "D": "Gravitatsion tolqinlar ajralishi oqibatida"
+            "D": "Gravitatsion to'lqinlar ajralishi oqibatida"
         },
         "correct": "B",
         "explanation": "Impuls momentining saqlanish qonuniga ko'ra, jism radiusi kichrayganda uning burchak tezligi avtomatik ravishda ortadi.",
@@ -684,14 +716,9 @@ async def evaluate_initial_window(app, chat_id: int, target_q_num: int):
             f"{rating_formatted}\n\n"
             f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
         )
-        sent_reveal = await app.bot.send_message(
-            chat_id, 
-            reply, 
-            parse_mode="HTML"
-        )
-        # Schedule 10-minute auto-cleanup for the question & reveal message
-        cleanup_mids = [round_st["message_id"], sent_reveal.message_id]
-        asyncio.create_task(schedule_round_cleanup(app.bot, chat_id, cleanup_mids))
+        sent_reveal = await app.bot.send_message(chat_id, reply, parse_mode="HTML")
+        track_for_cleanup(chat_id, sent_reveal.message_id, delay_seconds=EXPIRE_CLEANUP_SECONDS)
+        track_for_cleanup(chat_id, round_st.get("message_id"), delay_seconds=EXPIRE_CLEANUP_SECONDS)
 
     else:
         roast_section = generate_dynamic_roast(
@@ -707,44 +734,43 @@ async def evaluate_initial_window(app, chat_id: int, target_q_num: int):
             f"🔥 O‘yin davom etadi — endi kim birinchi to‘g‘ri topsa, to‘liq 10 ball oladi!",
             parse_mode="HTML"
         )
-        # Clean up this notification after 10 minutes as well
-        asyncio.create_task(schedule_round_cleanup(app.bot, chat_id, [sent_reveal.message_id]))
+        track_for_cleanup(chat_id, sent_reveal.message_id, delay_seconds=EXPIRE_CLEANUP_SECONDS)
 
 # --- Round Engine (Multi-Group Post) ---
 async def post_hourly_question(app):
     for chat_id in GROUP_CHAT_IDS:
-        round_st = get_round_state(chat_id)
-        chat_scores = get_chat_scores(chat_id)
+        try:
+            round_st = get_round_state(chat_id)
+            chat_scores = get_chat_scores(chat_id)
 
-        if round_st["active"]:
-            round_st["active"] = False
-            prev_q_num = round_st["q_num"]
-            prev_correct = round_st["correct"]
-            prev_ans = round_st["options"].get(prev_correct, "")
-            prev_expl = round_st["explanation"]
-            prev_detailed = round_st["detailed_explanation"]
-            prev_source = round_st.get("source", "")
-            prev_q_text = round_st["question_text"]
-            prev_q_mid = round_st["message_id"]
+            if round_st["active"]:
+                round_st["active"] = False
+                prev_q_num = round_st["q_num"]
+                prev_correct = round_st["correct"]
+                prev_ans = round_st["options"].get(prev_correct, "")
+                prev_expl = round_st["explanation"]
+                prev_detailed = round_st["detailed_explanation"]
+                prev_source = round_st.get("source", "")
+                prev_q_text = round_st["question_text"]
+                prev_q_mid = round_st["message_id"]
 
-            answers = round_st["answers"]
-            unique_answers = []
-            seen_ids = set()
-            for ans in answers:
-                if ans["user"].id not in seen_ids:
-                    seen_ids.add(ans["user"].id)
-                    unique_answers.append(ans)
+                answers = round_st["answers"]
+                unique_answers = []
+                seen_ids = set()
+                for ans in answers:
+                    if ans["user"].id not in seen_ids:
+                        seen_ids.add(ans["user"].id)
+                        unique_answers.append(ans)
 
-            wrong_answers = [ans for ans in unique_answers if ans["choice"] != prev_correct]
-            wrong_grouped = {}
-            for ans in wrong_answers:
-                letter = ans["choice"]
-                name = ans["user"].first_name or "O'yinchi"
-                if letter not in wrong_grouped:
-                    wrong_grouped[letter] = []
-                wrong_grouped[letter].append(name)
+                wrong_answers = [ans for ans in unique_answers if ans["choice"] != prev_correct]
+                wrong_grouped = {}
+                for ans in wrong_answers:
+                    letter = ans["choice"]
+                    name = ans["user"].first_name or "O'yinchi"
+                    if letter not in wrong_grouped:
+                        wrong_grouped[letter] = []
+                    wrong_grouped[letter].append(name)
 
-            try:
                 leaderboard_str = await update_pin(
                     app.bot,
                     chat_id=chat_id,
@@ -769,17 +795,12 @@ async def post_hourly_question(app):
                     f"{roast_section}\n\n"
                     f"⚡ Keyingi savol chiqmoqda..."
                 )
-                sent_timeout = await app.bot.send_message(
-                    chat_id, 
-                    timeout_msg, 
-                    parse_mode="HTML"
-                )
-                # Clean up unanswered question & timeout reveal after 10 minutes
-                cleanup_mids = [prev_q_mid, sent_timeout.message_id]
-                asyncio.create_task(schedule_round_cleanup(app.bot, chat_id, cleanup_mids))
+                sent_timeout = await app.bot.send_message(chat_id, timeout_msg, parse_mode="HTML")
+                track_for_cleanup(chat_id, sent_timeout.message_id, delay_seconds=EXPIRE_CLEANUP_SECONDS)
+                track_for_cleanup(chat_id, prev_q_mid, delay_seconds=EXPIRE_CLEANUP_SECONDS)
                 await asyncio.sleep(1)
-            except Exception as e:
-                logger.error(f"Error expiring unanswered question in {chat_id}: {e}", exc_info=True)
+        except Exception as e:
+            logger.error(f"Error expiring unanswered question in {chat_id}: {e}", exc_info=True)
 
     sample_chat = GROUP_CHAT_IDS[0] if GROUP_CHAT_IDS else 0
     pin = await get_or_create_leaderboard(app.bot, sample_chat)
@@ -788,40 +809,41 @@ async def post_hourly_question(app):
     data = fetch_question(q_num, history)
 
     for chat_id in GROUP_CHAT_IDS:
-        round_st = get_round_state(chat_id)
-        
-        round_st["active"] = True
-        round_st["q_num"] = q_num
-        round_st["correct"] = data["correct"].upper()
-        round_st["options"] = data["options"]
-        round_st["explanation"] = data["explanation"]
-        round_st["detailed_explanation"] = data.get("detailed_explanation", data["explanation"])
-        round_st["source"] = data.get("source", "Rasmiy ta'lim va akademik manbalar")
-        round_st["question_text"] = data["question"]
-        round_st["attempted_users"].clear()
-        round_st["answers"].clear()
-        round_st["answered_names"].clear()
-        round_st["in_initial_window"] = True
-        
-        grade_label = data.get("grade", "5-sinf")
-        diff_score = data.get("difficulty_score", "1/10")
-        
-        msg_text = (
-            f"🏆 1 MILLION QUESTIONS · #{q_num:07d}\n"
-            f"📚 Fan: {data['subject']} | 🎓 Bosqich: {grade_label} ({diff_score})\n\n"
-            f"❓ {data['question']}\n\n"
-            f"A) {data['options']['A']}\n"
-            f"B) {data['options']['B']}\n"
-            f"C) {data['options']['C']}\n"
-            f"D) {data['options']['D']}\n\n"
-            f"⚡ Variantni yozing (A, B, C yoki D)!\n"
-            f"⏳ Dastlabki 30 soniya ichida eng tez topgan 3 kishi ball oladi (🥇10, 🥈5, 🥉3)!\n"
-            f"🤫 Javobingiz bot tomonidan o‘chirilib, quyidagi ro‘yxatga kiritiladi."
-        )
-        round_st["base_text"] = msg_text
         try:
+            round_st = get_round_state(chat_id)
+            
+            round_st["active"] = True
+            round_st["q_num"] = q_num
+            round_st["correct"] = data["correct"].upper()
+            round_st["options"] = data["options"]
+            round_st["explanation"] = data["explanation"]
+            round_st["detailed_explanation"] = data.get("detailed_explanation", data["explanation"])
+            round_st["source"] = data.get("source", "Rasmiy ta'lim va akademik manbalar")
+            round_st["question_text"] = data["question"]
+            round_st["attempted_users"].clear()
+            round_st["answers"].clear()
+            round_st["answered_names"].clear()
+            round_st["in_initial_window"] = True
+            
+            grade_label = data.get("grade", "5-sinf")
+            diff_score = data.get("difficulty_score", "1/10")
+            
+            msg_text = (
+                f"🏆 1 MILLION QUESTIONS · #{q_num:07d}\n"
+                f"📚 Fan: {data['subject']} | 🎓 Bosqich: {grade_label} ({diff_score})\n\n"
+                f"❓ {data['question']}\n\n"
+                f"A) {data['options']['A']}\n"
+                f"B) {data['options']['B']}\n"
+                f"C) {data['options']['C']}\n"
+                f"D) {data['options']['D']}\n\n"
+                f"⚡ Variantni yozing (A, B, C yoki D)!\n"
+                f"⏳ Dastlabki 30 soniya ichida eng tez topgan 3 kishi ball oladi (🥇10, 🥈5, 🥉3)!\n"
+                f"🤫 Javobingiz bot tomonidan o‘chirilib, quyidagi ro‘yxatga kiritiladi."
+            )
+            round_st["base_text"] = msg_text
             sent_msg = await app.bot.send_message(chat_id, msg_text)
             round_st["message_id"] = sent_msg.message_id
+            track_for_cleanup(chat_id, sent_msg.message_id, delay_seconds=EXPIRE_CLEANUP_SECONDS + 300)
             logger.info(f"Question #{q_num} posted in {chat_id}.")
             asyncio.create_task(evaluate_initial_window(app, chat_id, q_num))
         except Exception as e:
@@ -856,10 +878,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.message.from_user
 
     try:
-        await context.bot.delete_message(
-            chat_id=chat_id,
-            message_id=update.message.message_id
-        )
+        await context.bot.delete_message(chat_id=chat_id, message_id=update.message.message_id)
     except Exception as e:
         logger.error(f"Failed to delete user answer message: {e}")
 
@@ -903,7 +922,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"Could not update question message in {target_cid}: {e}")
 
-        # Sudden death resolution
         if not target_round["in_initial_window"]:
             try:
                 if choice == target_round["correct"]:
@@ -944,20 +962,14 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if update.message.message_thread_id:
                         kwargs["message_thread_id"] = update.message.message_thread_id
 
-                    sent_winner_msg = await context.bot.send_message(
-                        target_cid, 
-                        reply, 
-                        **kwargs
-                    )
-                    # Schedule 10-minute auto-cleanup for sudden-death round
-                    cleanup_mids = [target_round["message_id"], sent_winner_msg.message_id]
-                    asyncio.create_task(schedule_round_cleanup(context.bot, target_cid, cleanup_mids))
+                    sent_winner_msg = await context.bot.send_message(target_cid, reply, **kwargs)
+                    track_for_cleanup(target_cid, sent_winner_msg.message_id, delay_seconds=EXPIRE_CLEANUP_SECONDS)
+                    track_for_cleanup(target_cid, target_round.get("message_id"), delay_seconds=EXPIRE_CLEANUP_SECONDS)
             except Exception as e:
                 logger.error(f"Error handling sudden death answer in {target_cid}: {e}", exc_info=True)
 
 # --- Audio/Voice Message Transcriber ---
 async def cmd_transcribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    """Transcribes a replied voice message into text using Groq Whisper."""
     chat_id = update.effective_chat.id
     if chat_id not in GROUP_CHAT_IDS:
         return
@@ -1197,7 +1209,8 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"⏳ Keyingi savol 5 daqiqadan so‘ng yoki /test orqali chiqadi."
     )
     sent_skip = await update.message.reply_text(reply, parse_mode="HTML")
-    asyncio.create_task(schedule_round_cleanup(context.bot, chat_id, [round_st["message_id"], sent_skip.message_id]))
+    track_for_cleanup(chat_id, sent_skip.message_id, delay_seconds=EXPIRE_CLEANUP_SECONDS)
+    track_for_cleanup(chat_id, round_st.get("message_id"), delay_seconds=EXPIRE_CLEANUP_SECONDS)
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1411,6 +1424,7 @@ async def scheduler(app):
 async def on_startup(app):
     global scheduler_task
     scheduler_task = asyncio.create_task(scheduler(app))
+    asyncio.create_task(message_cleaner_task(app.bot))
 
 # --- Main Startup ---
 if __name__ == "__main__":
