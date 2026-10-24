@@ -45,6 +45,7 @@ CYRILLIC_TO_LATIN = {
 }
 
 INITIAL_WINDOW_SECONDS = 30
+EXPIRE_CLEANUP_SECONDS = 600  # 10 minutes cleanup window
 GLOBAL_USER_NAME = "biloliddin"
 
 # --- Persistent Scores Storage per Chat ID ---
@@ -79,6 +80,21 @@ def update_player_score(chat_id: int, player_name: str, pts_to_add: int) -> int:
     chat_dict = get_chat_scores(chat_id)
     new_score = chat_dict.get(player_name, 0) + pts_to_add
     chat_dict[player_name] = new_score
+
+    if player_name.lower() == GLOBAL_USER_NAME.lower():
+        max_global = new_score
+        for c_key, c_scores in ALL_SCORES.items():
+            for p_key, p_val in c_scores.items():
+                if p_key.lower() == GLOBAL_USER_NAME.lower() and p_val > max_global:
+                    max_global = p_val
+        
+        for c_key in ALL_SCORES.keys():
+            for p_key in list(ALL_SCORES[c_key].keys()):
+                if p_key.lower() == GLOBAL_USER_NAME.lower():
+                    ALL_SCORES[c_key][p_key] = max_global
+            if GLOBAL_USER_NAME not in ALL_SCORES[c_key]:
+                ALL_SCORES[c_key][GLOBAL_USER_NAME] = max_global
+
     save_scores()
     return chat_dict[player_name]
 
@@ -149,47 +165,33 @@ def is_vulgar(text: str) -> bool:
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
 TOPIC_POOLS = [
-    "O'zbekiston tarixi: Qadimgi Baqtriya, So'g'diyona va Kushonlar davri",
-    "O'zbekiston tarixi: Somoniylar, Qoraxoniylar va Xorazmshohlar davlati",
-    "O'zbekiston tarixi: Amir Temur harbiy yurishlari va diplomatik aloqalari",
-    "O'zbekiston tarixi: Turkiston jadidchilik harakati va 20-asr fojialari",
-    "Jahon tarixi: Qadimgi Mesopotamiya, Bobil va Finikiya sivilizatsiyasi",
-    "Jahon tarixi: Qadimgi Rim senati, imperatorlari va mashhur janglari",
-    "Jahon tarixi: O'rta asrlar Yevropasi, Salib yurishlari va feodalizm",
-    "Jahon tarixi: Birinchi va Ikkinchi jahon urushidagi kam ma'lum burilish nuqtalari",
-    "Astronomiya: Ekzosayyoralar, neytron yulduzlar va pulsar hodisalari",
-    "Astronomiya: Galaktikalar to'qnashuvi, relyikt nurlanish va qora tuynuklar",
-    "Kosmonavtika: Mashhur kosmik zondlar (Voyager, Cassini, James Webb) missiyalari",
-    "Fizika: Nisbiylik nazariyasi, optik hodisalar va yorug'lik tabiati",
-    "Fizika: Termodinamika qonunlari va zamonaviy kvant kashfiyotlari",
-    "Kimyo: Davriy jadvaldagi radioaktiv elementlar va ularning ishlatilishi",
-    "Kimyo: Kundalik hayotdagi g'aroyib kimyoviy reaksiyalar va qotishmalar",
-    "Inson biologiyasi: Neyronlar, gormonlar, miya tuzilishi va qon aylanishi",
-    "Biologiya va Zoologiya: Dengiz tubi (Abissal) mavjudotlari va ularning moslashuvi",
-    "Biologiya va Botanika: Dunyodagi eng zaharli, kamyob va qadimgi o'simliklar",
-    "Geografiya: Dengizga chiqish yo'li yo'q davlatlar, kutilmagan eksklavlar va chegaralar",
-    "Geografiya: Dunyodagi eng xavfli vulqonlar, kanyonlar va tektonik yoriqlar",
-    "Texnologiya: Internet protokollari, kriptografiya va kompyuter tarixi",
-    "Adabiyot: Mumtoz adabiyot durdonalari va jahon falsafasi",
-    "Mantiq va Deduksiya: Detektiv uslubidagi faktlar va chalkash mantiqiy masalalar"
+    "O'zbekiston tarixi: Qadimgi Baqtriya, So'g'diyona va Kushonlar davri strategik burilishlari",
+    "O'zbekiston tarixi: Somoniylar, Qoraxoniylar va Xorazmshohlar davlati diplomatik munosabatlari",
+    "O'zbekiston tarixi: Amir Temur harbiy strategiyalari va xalqaro savdo bitimlari",
+    "O'zbekiston tarixi: Turkiston jadidchilik harakati va ma'rifatparvarlar ijtimoiy tahlili",
+    "Jahon tarixi: Qadimgi Mesopotamiya, Bobil va Finikiya sivilizatsiyasi huquqiy va iqtisodiy tizimi",
+    "Jahon tarixi: Qadimgi Rim senati, imperatorlari va harbiy-siyosiy burilish nuqtalari",
+    "Jahon tarixi: O'rta asrlar Yevropasi feodalizmining sabab-oqibat mexanizmlari",
+    "Astronomiya: Ekzosayyoralar, neytron yulduzlar va fizik ko'rsatkichlar",
+    "Fizika: Kvant mexanikasi, termodinamika va nisbiylik nazariyasi konseptual mantiqlari",
+    "Biologiya va Neyrobiologiya: Miya tuzilishi, neyronlar, evolyutsion adaptatsiyalar",
+    "Geografiya va Geopolitika: Eksklavlar, tektonik hodisalar va strategik bo'g'ozlar",
+    "Mantiq va Deduksiya: Detektiv uslubidagi mantiqiy xulosalar va paradokslar"
 ]
 
 ISLAMIC_TOPIC_POOLS = [
-    "Islom dini va aqoid: Islom va iymon arkonlari, farz va vojib amallar, fiqh asoslari",
-    "Islom tarixi: Payg'ambarimiz Muhammad (s.a.v.) siyratlari — Makka va Madina davri muhim voqealari",
-    "Islom tarixi: Xulafoi Roshidin (Abu Bakr, Umar, Usmon, Ali r.a.) xalifaligi va adolat tizimi",
-    "Islom tarixi: Movarounnahr buyuk muhaddislari (Imom Buxoriy, Imom Termiziy) va fiqh olimlari (Marg'inoniy)",
-    "Islom tarixi: Islom oltin davri, Bag'doddagi 'Baytul-Hikma' akademiyasi va mutafakkirlar merosi",
-    "Islomiy obidalar va geografiya: Ka'ba, Masjidul Aqso, Masjidun Nabaviy va qadimiy islom shaharlari",
-    "Hadis ilmi va Qur'on tarixi: Mushafi Usmoniy jamlanishi va mashhur hadis to'plamlari"
+    "Islom tarixi va Fiqh: Shariat manbalari va fiqhiy qoidalar mantiqiy asoslari",
+    "Islom tarixi: Payg'ambarimiz Muhammad (s.a.v.) siyratlari — Makka va Madina davri strategik qarorlari",
+    "Islom tarixi: Xulafoi Roshidin (Abu Bakr, Umar, Usmon, Ali r.a.) adolat va davlat boshqaruvi tizimi",
+    "Islom tarixi: Movarounnahr buyuk muhaddislari (Imom Buxoriy, Imom Termiziy) ilmiy metodologiyasi",
+    "Islom tarixi: Islom oltin davri, Bag'doddagi 'Baytul-Hikma' akademiyasi ilmiy kashfiyotlari"
 ]
 
 QUESTION_ANGLES = [
-    "Kutilmagan, ko'pchilik noto'g'ri taxmin qiladigan paradoksal fakt",
-    "Tarixiy burilish yasagan keskin voqea yoki strategik qaror",
-    "Hodisa yoki qonuniyatning sabab-oqibat mexanizmi",
-    "Kamchilik biladigan, lekin muhim ahamiyatga ega ilmiy kashfiyot",
-    "Mantiqiy deduksiya va chuqur tahlilni talab qiluvchi jumboq"
+    "Mantiqiy deduksiya va chuqur sabab-oqibat tahlili",
+    "Tarixiy burilish yasagan keskin voqea yoki strategik qaror tahlili",
+    "Tabiiy qonuniyat yoki hodisaning fizik/biologik mexanizmi",
+    "Ilmiy gipotezani isbotlovchi yoki raddiyat beruvchi fakt"
 ]
 
 def create_empty_round():
@@ -200,6 +202,7 @@ def create_empty_round():
         "options": {},
         "explanation": "",
         "detailed_explanation": "",
+        "source": "",
         "question_text": "",
         "attempted_users": set(),
         "in_initial_window": False,
@@ -215,6 +218,17 @@ def get_round_state(chat_id: int) -> dict:
     if chat_id not in ROUND_STATES:
         ROUND_STATES[chat_id] = create_empty_round()
     return ROUND_STATES[chat_id]
+
+# --- Message Expiration Cleanup Helper ---
+async def schedule_round_cleanup(bot, chat_id: int, message_ids: list):
+    """Deletes specified messages after EXPIRE_CLEANUP_SECONDS (10 minutes)."""
+    await asyncio.sleep(EXPIRE_CLEANUP_SECONDS)
+    for mid in message_ids:
+        if mid:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=mid)
+            except Exception:
+                pass
 
 # --- Keep-Alive Web Server ---
 class HealthHandler(BaseHTTPRequestHandler):
@@ -332,16 +346,20 @@ def escape_tg_html(text: str) -> str:
         return ""
     return str(text).replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;")
 
-def format_izoh_block(explanation: str, detailed: str) -> str:
+def format_izoh_block(explanation: str, detailed: str, source: str = "") -> str:
     clean_expl = escape_tg_html(explanation)
     clean_detail = escape_tg_html(detailed)
+    clean_src = escape_tg_html(source)
+    
+    src_line = f"\n📚 <b>Manba:</b> {clean_src}" if clean_src else ""
+
     if clean_detail and clean_detail.strip() != clean_expl.strip():
         return (
-            f"💡 <b>Izoh:</b> {clean_expl}\n\n"
+            f"💡 <b>Izoh:</b> {clean_expl}{src_line}\n\n"
             f"<blockquote expandable>📖 <b>Batafsil ma'lumot (o'qish uchun bosing):</b>\n\n"
             f"{clean_detail}</blockquote>"
         )
-    return f"💡 <b>Izoh:</b> {clean_expl}"
+    return f"💡 <b>Izoh:</b> {clean_expl}{src_line}"
 
 def format_leaderboard_block(leaderboard_str: str) -> str:
     clean_lb = escape_tg_html(leaderboard_str)
@@ -362,7 +380,7 @@ def clean_json_response(raw_text: str) -> dict:
 def get_grade_info(q_num: int):
     grade_num = 5 + ((q_num - 1) // 1000)
     if grade_num <= 11:
-        label = f"{grade_num}-sinf"
+        label = f"{grade_num}-sinf (BMBA / DTM)"
         score = f"{grade_num - 4}/10"
     elif grade_num <= 15:
         label = "Oliy ta'lim (Bakalavr)"
@@ -453,32 +471,36 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
 # --- Offline Fallback Questions ---
 OFFLINE_BACKUP_QUESTIONS = [
     {
-        "subject": "Astronomiya",
-        "question": "Quyosh sistemasidagi eng katta sayyora qaysi?",
-        "options": {"A": "Yupiter", "B": "Saturn", "C": "Mars", "D": "Venera"},
-        "correct": "A",
-        "explanation": "Yupiter Quyosh tizimidagi eng ulkan gigant gaz sayyorasidir.",
-        "detailed_explanation": "Yupiter sayyorasi shu qadar ulkanki, uning ichiga Quyosh tizimidagi barcha boshqa sayyoralarni bemalol joylashtirish mumkin. U asosan vodorod va geliydan iborat bo'lib, o'zining kuchli magnit maydoniga ega. Mashhur 'Katta Qizil Dog'' esa unda kamida 300 yildan beri to'xtamayotgan ulkan bo'rondir."
+        "subject": "O'zbekiston Tarixi",
+        "question": "Amir Temur Yevropa qirollari bilan diplomatik yozishmalarda asosan qanday iqtisodiy va strategik shartni ilgari surgan?",
+        "options": {
+            "A": "Usmoniylar imperiyasiga qarshi birgalikda dengiz floti ajratish",
+            "B": "Ipak yo'li bo'ylab savdogarlarning erkin harakatlanishi va xavfsizlik kafolati",
+            "C": "Yevropa konlaridan kumush va oltin xomashyosini import qilish",
+            "D": "Ispaniya qirolligi bilan harbiy alyans tuzish"
+        },
+        "correct": "B",
+        "explanation": "Amir Temur Sharl VI va Genrix IV ga yo'llagan maktublarida xalqaro savdo xavfsizligini ta'minlashni asosiy prioritet qilib qo'ygan.",
+        "detailed_explanation": "Amir Temur va Yevropa hukmdorlari o'rtasidagi yozishmalar asosan Ipak yo'lining g'arbiy va sharqiy tarmoqlarida savdo xavfsizligini o'rnatisga qaratilgan edi. U savdogarlarga bojxona imtiyozlari berilishini ta'minlagan.",
+        "source": "Fransiya Qirollik Arxivi (Archives Nationales) — Temur va Sharl VI maktublari"
     },
     {
-        "subject": "Biologiya",
-        "question": "O'simliklar quyosh nuri yordamida oziq modda ishlab chiqarish jarayoni nima deyiladi?",
-        "options": {"A": "Fotosintez", "B": "Nafas olish", "C": "Transpiratsiya", "D": "Diffuziya"},
-        "correct": "A",
-        "explanation": "Fotosintez jarayonida xlorofill yorug'lik energiyasini kimyoviy energiyaga aylantiradi.",
-        "detailed_explanation": "Fotosintez — yer yuzidagi barcha tiriklikning asosi. Yashil o'simliklar barglaridagi xloroplastlar yorug'lik, suv va karbonat angidriddan foydalanib oziq moddalar hamda biz nafas oladigan toza kislorodni ishlab chiqaradi."
-    },
-    {
-        "subject": "Geografiya",
-        "question": "Dunyodagi eng chuqur chuchuk suvli ko'l qaysi?",
-        "options": {"A": "Baykal", "B": "Kaspiy", "C": "Viktoriya", "D": "Michigan"},
-        "correct": "A",
-        "explanation": "Baykal ko'li dunyodagi eng qadimgi va eng chuqur (1642 metr) chuchuk suv havzasidir.",
-        "detailed_explanation": "Baykal ko'li Sibir janubida joylashgan bo'lib, uning yoshi 25 million yildan oshiq. U dunyodagi barcha erigan toza chuchuk suv zaxirasining salkam 20 foizini o'zida saqlaydi."
+        "subject": "Fizika va Astronomiya",
+        "question": "Nima uchun neytron yulduzlarning aylanish tezligi uning radiusi qisqargan sari keskin ortib boradi?",
+        "options": {
+            "A": "Magnit maydoni kuchayishi natijasida",
+            "B": "Kinetik impuls impuls momentsiyaning saqlanish qonuniga ko'ra",
+            "C": "Termoyadroviy reaksiyalar to'xtashi sababli",
+            "D": "Gravitatsion tolqinlar ajralishi oqibatida"
+        },
+        "correct": "B",
+        "explanation": "Impuls momentining saqlanish qonuniga ko'ra, jism radiusi kichrayganda uning burchak tezligi avtomatik ravishda ortadi.",
+        "detailed_explanation": "Aylanayotgan gigant yulduz o'z o'qi atrofida siqilib, neytron yulduziga aylanganda uning inersiya momenti kamayadi va burchak tezligi soniyasiga yuzlab marta aylanish darajasigacha ko'tariladi.",
+        "source": "Astrophysics Journal — Neutron Star Dynamics"
     }
 ]
 
-# --- Question Generator ---
+# --- Question Generator (Grounded & Non-Trivia System Prompt) ---
 def fetch_question(q_num, recent_history):
     grade_label, grade_score = get_grade_info(q_num)
 
@@ -492,29 +514,24 @@ def fetch_question(q_num, recent_history):
     history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "Hozircha yo'q"
 
     prompt = f"""
-    Sen Telegram viktorinasi uchun ORIGINAL va TAKRORLANMAS savol tuzuvchisan.
+    Sen Telegram viktorinasi uchun AKADEMIK, TIZIMLI VA MA'NOLIY SAVOL TUZUVCHISAN.
     Hozirgi savol raqami: #{q_num} / 1 000 000.
     Unikal kalit: {cache_buster}.
     
-    QAT'IY DARAJA TALABI:
-    - Hozirgi daraja: **{grade_label}** darajasi ({grade_score}).
-    - Savol murakkabligi va tili aynan **{grade_label}** o'quvchisi qiynalmasdan tushunadigan soddalikda bo'lsin.
-    - O'ta qiyin akademik terminlar yoki chalkash formulalarni BERMA!
-    - Agar mavzu maktab dasturida bo'lmasa ham, uni {grade_label} darajasiga moslab sodda va qiziqarli tuz.
-
+    DARAJA TALABI:
+    - Bosqich: **{grade_label}** ({grade_score}).
+    
     MAVZU: {chosen_topic}
     USLUB: {chosen_angle}
     
-    QAT'IY TAQIQLAR:
-    1. LINGVISTIK VA SO'Z KELIB CHIQISHI TAQIQLANADI ('qaysi tildan olingan', 'ma'nosi nima' kabi savollar bo'lmasin).
-    2. SO'NGGI SAVOLLAR TAKRORLANMASIN:
+    QAT'IY QOIDALAR (AI SLOP VA TRIVIANI YO'QOTISH):
+    1. YODLASH SAVOLLARI TAQIQLANADI: Yillar (yilini topish), tildan olinganlik (ma'nosini topish), oddiy nomlarni yodlash savollari UMUMAN BO'LMASIN!
+    2. CHUQUR SABAB-OQIBAT VA MANTIQ: Savol faqat "Nima uchun bu hodisa yuz bergan?", "Ushbu qarorning strategik oqibati nima bo'lgan?", "Qaysi fizik/biologik qonuniyat buni tushuntiradi?" uslubida bo'lsin.
+    3. MANTIQIY VARIANTLAR: A, B, C, D variantlarining barchasi mantiqli va jiddiy ko'rinsin (osonlikcha chiqarib tashlanadigan kulgili variantlar berilmasin).
+    4. SO'NGGI SAVOLLAR TAKRORLANMASIN:
     {history_block}
-    3. Agar mavzu Islom dini yoki tarixiga oid bo'lsa, savol faqat sahih manbalar asosida, hurmat bilan tuzilsin.
-    4. 4 ta variant (A, B, C, D) ber. Faqat 1 tasi to'g'ri bo'lsin.
-    
-    BATAFSIL IZOH TALABI:
-    - 'detailed_explanation' maydonida mavzuning qiziqarli ilmiy/tarixiy sabab-oqibatlari, fonga oid tafsilotlari va qiziqarli faktlarini 2-3 xatboshida chiroyli tushuntirib ber.
-    
+    5. ANIQ MANBA (SOURCE): 'source' maydonida ushbu fakt aynan qaysi maktab darsligi, ilmiy ensiklopediya, xalqaro arxiv yoki sahih manbadan olinganini ko'rsat (masalan: "O'zbekiston Tarixi 9-sinf darsligi", "Sahihul Buxoriy #128", "NASA Exoplanet Archive").
+
     Faqat toza JSON formatida javob ber:
     {{
         "subject": "{chosen_topic.split(':')[0].strip()}",
@@ -524,7 +541,8 @@ def fetch_question(q_num, recent_history):
         "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
         "correct": "A",
         "explanation": "Qisqa tushuntirish (1 gap)",
-        "detailed_explanation": "Kengaytirilgan tahlil, qiziqarli faktlar va sabab-oqibatlar (2-3 xatboshi)"
+        "detailed_explanation": "Kengaytirilgan tahlil va faktlar (2-3 xatboshi)",
+        "source": "Aniq darslik, kitob yoki rasmiy ilmiy manba nomi"
     }}
     """
 
@@ -543,11 +561,11 @@ def fetch_question(q_num, recent_history):
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": "Sen faqat to'g'ri JSON qaytaruvchi yordamchisan."},
+                {"role": "system", "content": "Sen faqat to'g'ri va akademik JSON qaytaruvchi yordamchisan."},
                 {"role": "user", "content": prompt}
             ],
             "response_format": {"type": "json_object"},
-            "temperature": 0.75
+            "temperature": 0.7
         }
         try:
             res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=30)
@@ -564,6 +582,8 @@ def fetch_question(q_num, recent_history):
                 parsed["difficulty_score"] = grade_score
                 if "detailed_explanation" not in parsed or not parsed["detailed_explanation"]:
                     parsed["detailed_explanation"] = parsed.get("explanation", "")
+                if "source" not in parsed or not parsed["source"]:
+                    parsed["source"] = "Rasmiy ta'lim va akademik manbalar"
                 logger.info(f"Groq generated successfully using {model}: {parsed['question'][:40]}...")
                 return parsed
 
@@ -640,7 +660,11 @@ async def evaluate_initial_window(app, chat_id: int, target_q_num: int):
         extra_correct = len(correct_answers) - 3
         extra_note = f"\n👏 Yana {extra_correct} kishi to‘g‘ri topdi, ammo shohsupaga ulgurmadi!" if extra_correct > 0 else ""
 
-        izoh_formatted = format_izoh_block(round_st['explanation'], round_st['detailed_explanation'])
+        izoh_formatted = format_izoh_block(
+            round_st['explanation'], 
+            round_st['detailed_explanation'],
+            round_st.get('source', '')
+        )
         rating_formatted = format_leaderboard_block(leaderboard_str)
         
         roast_section = generate_dynamic_roast(
@@ -660,11 +684,15 @@ async def evaluate_initial_window(app, chat_id: int, target_q_num: int):
             f"{rating_formatted}\n\n"
             f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
         )
-        await app.bot.send_message(
+        sent_reveal = await app.bot.send_message(
             chat_id, 
             reply, 
             parse_mode="HTML"
         )
+        # Schedule 10-minute auto-cleanup for the question & reveal message
+        cleanup_mids = [round_st["message_id"], sent_reveal.message_id]
+        asyncio.create_task(schedule_round_cleanup(app.bot, chat_id, cleanup_mids))
+
     else:
         roast_section = generate_dynamic_roast(
             round_st["question_text"],
@@ -672,13 +700,15 @@ async def evaluate_initial_window(app, chat_id: int, target_q_num: int):
             correct_choice,
             wrong_grouped
         )
-        await app.bot.send_message(
+        sent_reveal = await app.bot.send_message(
             chat_id,
             f"⏳ <b>30 soniya o‘tdi, ammo biror kishi ham to‘g‘ri topolmadi!</b>"
             f"{roast_section}\n\n"
             f"🔥 O‘yin davom etadi — endi kim birinchi to‘g‘ri topsa, to‘liq 10 ball oladi!",
             parse_mode="HTML"
         )
+        # Clean up this notification after 10 minutes as well
+        asyncio.create_task(schedule_round_cleanup(app.bot, chat_id, [sent_reveal.message_id]))
 
 # --- Round Engine (Multi-Group Post) ---
 async def post_hourly_question(app):
@@ -693,7 +723,9 @@ async def post_hourly_question(app):
             prev_ans = round_st["options"].get(prev_correct, "")
             prev_expl = round_st["explanation"]
             prev_detailed = round_st["detailed_explanation"]
+            prev_source = round_st.get("source", "")
             prev_q_text = round_st["question_text"]
+            prev_q_mid = round_st["message_id"]
 
             answers = round_st["answers"]
             unique_answers = []
@@ -721,7 +753,7 @@ async def post_hourly_question(app):
                     new_question_summary=prev_q_text
                 )
 
-                izoh_formatted = format_izoh_block(prev_expl, prev_detailed)
+                izoh_formatted = format_izoh_block(prev_expl, prev_detailed, prev_source)
                 roast_section = generate_dynamic_roast(
                     prev_q_text,
                     round_st["options"],
@@ -737,11 +769,14 @@ async def post_hourly_question(app):
                     f"{roast_section}\n\n"
                     f"⚡ Keyingi savol chiqmoqda..."
                 )
-                await app.bot.send_message(
+                sent_timeout = await app.bot.send_message(
                     chat_id, 
                     timeout_msg, 
                     parse_mode="HTML"
                 )
+                # Clean up unanswered question & timeout reveal after 10 minutes
+                cleanup_mids = [prev_q_mid, sent_timeout.message_id]
+                asyncio.create_task(schedule_round_cleanup(app.bot, chat_id, cleanup_mids))
                 await asyncio.sleep(1)
             except Exception as e:
                 logger.error(f"Error expiring unanswered question in {chat_id}: {e}", exc_info=True)
@@ -761,6 +796,7 @@ async def post_hourly_question(app):
         round_st["options"] = data["options"]
         round_st["explanation"] = data["explanation"]
         round_st["detailed_explanation"] = data.get("detailed_explanation", data["explanation"])
+        round_st["source"] = data.get("source", "Rasmiy ta'lim va akademik manbalar")
         round_st["question_text"] = data["question"]
         round_st["attempted_users"].clear()
         round_st["answers"].clear()
@@ -831,7 +867,6 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     raw_choice = match.group(1)
     choice = CYRILLIC_TO_LATIN.get(raw_choice, raw_choice).upper()
 
-    # Mirroring for biloliddin across both groups, else local chat
     target_chats = GROUP_CHAT_IDS if user_name.lower() == GLOBAL_USER_NAME.lower() else [chat_id]
 
     for target_cid in target_chats:
@@ -868,6 +903,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
             except Exception as e:
                 logger.warning(f"Could not update question message in {target_cid}: {e}")
 
+        # Sudden death resolution
         if not target_round["in_initial_window"]:
             try:
                 if choice == target_round["correct"]:
@@ -888,7 +924,11 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     correct_letter = target_round["correct"]
                     ans_text = target_round["options"].get(correct_letter, "")
                     
-                    izoh_formatted = format_izoh_block(target_round['explanation'], target_round['detailed_explanation'])
+                    izoh_formatted = format_izoh_block(
+                        target_round['explanation'], 
+                        target_round['detailed_explanation'],
+                        target_round.get('source', '')
+                    )
                     rating_formatted = format_leaderboard_block(leaderboard_str)
 
                     reply = (
@@ -904,13 +944,65 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     if update.message.message_thread_id:
                         kwargs["message_thread_id"] = update.message.message_thread_id
 
-                    await context.bot.send_message(
+                    sent_winner_msg = await context.bot.send_message(
                         target_cid, 
                         reply, 
                         **kwargs
                     )
+                    # Schedule 10-minute auto-cleanup for sudden-death round
+                    cleanup_mids = [target_round["message_id"], sent_winner_msg.message_id]
+                    asyncio.create_task(schedule_round_cleanup(context.bot, target_cid, cleanup_mids))
             except Exception as e:
                 logger.error(f"Error handling sudden death answer in {target_cid}: {e}", exc_info=True)
+
+# --- Audio/Voice Message Transcriber ---
+async def cmd_transcribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Transcribes a replied voice message into text using Groq Whisper."""
+    chat_id = update.effective_chat.id
+    if chat_id not in GROUP_CHAT_IDS:
+        return
+
+    reply_msg = update.message.reply_to_message
+    if not reply_msg or (not reply_msg.voice and not reply_msg.audio):
+        warn = await context.bot.send_message(
+            chat_id,
+            "⚠️ <b>Foydalanish:</b> Ovozli xabarga reply qilib <code>/transcribe</code> deb yozing.",
+            parse_mode="HTML"
+        )
+        await asyncio.sleep(5)
+        try:
+            await warn.delete()
+        except Exception:
+            pass
+        return
+
+    status_msg = await update.message.reply_text("🎧 <i>Ovozli xabar eshitilmoqda va matnga o'girilmoqda...</i>", parse_mode="HTML")
+
+    try:
+        audio_obj = reply_msg.voice or reply_msg.audio
+        file_info = await context.bot.get_file(audio_obj.file_id)
+        file_bytes = await file_info.download_as_bytearray()
+
+        headers = {"Authorization": f"Bearer {GROQ_API_KEY}"}
+        files = {
+            "file": ("voice.ogg", bytes(file_bytes), "audio/ogg"),
+            "model": (None, "whisper-large-v3"),
+            "temperature": (None, "0.0")
+        }
+
+        res = requests.post("https://api.groq.com/openai/v1/audio/transcriptions", headers=headers, files=files, timeout=30)
+        data = res.json()
+        transcript = data.get("text", "").strip()
+
+        if transcript:
+            reply_text = f"🗣 <b>OVOZLI XABAR MATNI:</b>\n\n<i>\"{escape_tg_html(transcript)}\"</i>"
+            await status_msg.edit_text(reply_text, parse_mode="HTML")
+        else:
+            await status_msg.edit_text("❌ Ovozli xabarni matnga o'girishning imkoni bo'lmadi.")
+
+    except Exception as e:
+        logger.error(f"Error transcribing voice: {e}")
+        await status_msg.edit_text("⚠️ Ovozni tahlil qilishda xatolik yuz berdi.")
 
 # --- Commands ---
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -1085,6 +1177,7 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     ans_text = round_st["options"].get(correct_letter, "")
     explanation = round_st["explanation"]
     detailed = round_st["detailed_explanation"]
+    source = round_st.get("source", "")
     q_text = round_st.get("question_text", "")
     
     chat_scores = get_chat_scores(chat_id)
@@ -1096,14 +1189,15 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
         new_question_summary=q_text
     )
     
-    izoh_formatted = format_izoh_block(explanation, detailed)
+    izoh_formatted = format_izoh_block(explanation, detailed, source)
     reply = (
         f"⏭ <b>SAVOL O'TKAZIB YUBORILDI</b> (Admin tomonidan)\n\n"
         f"✅ <b>To‘g‘ri javob:</b> {correct_letter}) {escape_tg_html(ans_text)}\n"
         f"{izoh_formatted}\n\n"
         f"⏳ Keyingi savol 5 daqiqadan so‘ng yoki /test orqali chiqadi."
     )
-    await update.message.reply_text(reply, parse_mode="HTML")
+    sent_skip = await update.message.reply_text(reply, parse_mode="HTML")
+    asyncio.create_task(schedule_round_cleanup(context.bot, chat_id, [round_st["message_id"], sent_skip.message_id]))
 
 async def cmd_reset(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1333,6 +1427,8 @@ if __name__ == "__main__":
     app.add_handler(CommandHandler("cuss", cmd_cuss))
     app.add_handler(CommandHandler("uncuss", cmd_uncuss))
     app.add_handler(CommandHandler("cusslist", cmd_cusslist))
+    app.add_handler(CommandHandler("transcribe", cmd_transcribe))
+    app.add_handler(CommandHandler("stt", cmd_transcribe))
     app.add_handler(MessageHandler(filters.TEXT & (~filters.COMMAND), handle_message))
     
     app.run_polling()
