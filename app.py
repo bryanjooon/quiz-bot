@@ -45,7 +45,7 @@ CYRILLIC_TO_LATIN = {
 }
 
 INITIAL_WINDOW_SECONDS = 30
-EXPIRE_CLEANUP_SECONDS = 600  # 10 minutes
+EXPIRE_CLEANUP_SECONDS = 60  # Wiped 1 minute after answer is revealed
 GLOBAL_USER_NAME = "biloliddin"
 
 # --- Persistent Scores Storage per Chat ID ---
@@ -118,15 +118,15 @@ async def message_cleaner_task(bot):
                 if now >= item["delete_at"]:
                     try:
                         await bot.delete_message(chat_id=item["chat_id"], message_id=item["message_id"])
-                        logger.info(f"Cleaned up message {item['message_id']} in chat {item['chat_id']}")
+                        logger.info(f"Purged expired message {item['message_id']} from chat {item['chat_id']}")
                     except Exception as e:
-                        logger.warning(f"Failed to delete message {item['message_id']} in {item['chat_id']}: {e}")
+                        logger.warning(f"Could not delete message {item['message_id']} in {item['chat_id']}: {e}")
                 else:
                     remaining.append(item)
             MESSAGES_TO_PURGE[:] = remaining
         except Exception as e:
-            logger.error(f"Error in cleaner loop: {e}")
-        await asyncio.sleep(15)
+            logger.error(f"Cleaner loop error: {e}")
+        await asyncio.sleep(10)
 
 # --- Vulgarity & Profanity Filter ---
 VULGAR_PATTERNS = [
@@ -194,34 +194,22 @@ def is_vulgar(text: str) -> bool:
 
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
-TOPIC_POOLS = [
-    "O'zbekiston tarixi: Qadimgi Baqtriya, So'g'diyona va Kushonlar davri strategik burilishlari",
-    "O'zbekiston tarixi: Somoniylar, Qoraxoniylar va Xorazmshohlar davlati diplomatik munosabatlari",
-    "O'zbekiston tarixi: Amir Temur harbiy strategiyalari va xalqaro savdo bitimlari",
-    "O'zbekiston tarixi: Turkiston jadidchilik harakati va ma'rifatparvarlar ijtimoiy tahlili",
-    "Jahon tarixi: Qadimgi Mesopotamiya, Bobil va Finikiya sivilizatsiyasi huquqiy va iqtisodiy tizimi",
-    "Jahon tarixi: Qadimgi Rim senati, imperatorlari va harbiy-siyosiy burilish nuqtalari",
-    "Jahon tarixi: O'rta asrlar Yevropasi feodalizmining sabab-oqibat mexanizmlari",
-    "Astronomiya: Ekzosayyoralar, neytron yulduzlar va fizik ko'rsatkichlar",
-    "Fizika: Kvant mexanikasi, termodinamika va nisbiylik nazariyasi konseptual mantiqlari",
-    "Biologiya va Neyrobiologiya: Miya tuzilishi, neyronlar, evolyutsion adaptatsiyalar",
-    "Geografiya va Geopolitika: Eksklavlar, tektonik hodisalar va strategik bo'g'ozlar",
-    "Mantiq va Deduksiya: Detektiv uslubidagi mantiqiy xulosalar va paradokslar"
+# Cool, interesting, practical subjects
+COOL_TOPICS = [
+    "Mantiq va Detektiv jumboqlari (qotillik, o'g'irlik, mantiqiy paradoks)",
+    "Inson psixologiyasi va miya fokuslari (kognitiv xatolar, qiziq tajribalar)",
+    "Koinot sirlari va qora tuynuklar (kutilmagan g'aroyib hodisalar)",
+    "Tarixdagi eng aqlbovar qilmas va kulgili harbiy strategiyalar",
+    "G'aroyib tabiat va maxluqlar (dengiz tubi, zaharli hayvonlar hiylalari)",
+    "Dunyo sirlari va eng qiziq geografik anomaliyalar",
+    "Kriptografiya, xakerlik va internet sirlari",
+    "Amir Temur va buyuk sarkardalarning kutilmagan harbiy fokuslari"
 ]
 
-ISLAMIC_TOPIC_POOLS = [
-    "Islom tarixi va Fiqh: Shariat manbalari va fiqhiy qoidalar mantiqiy asoslari",
-    "Islom tarixi: Payg'ambarimiz Muhammad (s.a.v.) siyratlari — Makka va Madina davri strategik qarorlari",
-    "Islom tarixi: Xulafoi Roshidin (Abu Bakr, Umar, Usmon, Ali r.a.) adolat va davlat boshqaruvi tizimi",
-    "Islom tarixi: Movarounnahr buyuk muhaddislari (Imom Buxoriy, Imom Termiziy) ilmiy metodologiyasi",
-    "Islom tarixi: Islom oltin davri, Bag'doddagi 'Baytul-Hikma' akademiyasi ilmiy kashfiyotlari"
-]
-
-QUESTION_ANGLES = [
-    "Mantiqiy deduksiya va chuqur sabab-oqibat tahlili",
-    "Tarixiy burilish yasagan keskin voqea yoki strategik qaror tahlili",
-    "Tabiiy qonuniyat yoki hodisaning fizik/biologik mexanizmi",
-    "Ilmiy gipotezani isbotlovchi yoki raddiyat beruvchi fakt"
+COOL_ISLAMIC_TOPICS = [
+    "Islom tarixi: Sahobalarning zukkoligi, diplomatik hiylalari va xushmuomalaligi",
+    "Baytul-Hikma: Musulmon olimlarining dunyoni o'zgartirgan kashfiyotlari",
+    "Qur'on va Sunnatdagi aqlbovar qilmas mantiqiy va ilmiy dalillar"
 ]
 
 def create_empty_round():
@@ -412,19 +400,6 @@ def clean_json_response(raw_text: str) -> dict:
         cleaned = match.group(0)
     return json.loads(cleaned)
 
-def get_grade_info(q_num: int):
-    grade_num = 5 + ((q_num - 1) // 1000)
-    if grade_num <= 11:
-        label = f"{grade_num}-sinf (BMBA / DTM)"
-        score = f"{grade_num - 4}/10"
-    elif grade_num <= 15:
-        label = "Oliy ta'lim (Bakalavr)"
-        score = "8/10"
-    else:
-        label = "Akademik / Ekspert"
-        score = "10/10"
-    return label, score
-
 # --- Groq Dynamic Roast Generator ---
 def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses_grouped):
     if not wrong_guesses_grouped:
@@ -449,10 +424,9 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
 
     QAT'IY TALABLAR:
     1. Aholini SHAXSAN va VARIANTMA-VARIANT nomma-nom aytib roast qil!
-    2. Har bir guruh/odam uchun ularning variantini MANTIQAN VA ILMIY/TARIXIY tomondan nima uchun xato ekanligini 1-2 gapda achchiq va kulgili qilib tushuntir (roast qilayotganda ularga bilim ham ber!).
-    3. Aslo bir xil takroriy gaplar ('bu javobdan ancha yiroq edi' va h.k.) ISHLATMA! Har safar unikal va ijodiy yondash.
-    4. Hech qanday sarlavha (masalan: "Roast:", "Losers:") YOZMA! To'g'ridan-to'g'ri birinchi odam/variantdan boshla.
-    5. Har bir fikr to'liq va tugallangan nuqta bilan yakunlansin.
+    2. Har bir guruh/odam uchun ularning variantini MANTIQAN VA ILMIY/TARIXIY tomondan nima uchun xato ekanligini 1-2 gapda achchiq va kulgili qilib tushuntir.
+    3. Aslo bir xil takroriy gaplar ISHLATMA!
+    4. Hech qanday sarlavha ("Roast:", "Losers:") YOZMA!
     """
 
     headers = {
@@ -473,7 +447,7 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
                 {"role": "user", "content": prompt}
             ],
             "temperature": 0.85,
-            "max_tokens": 700
+            "max_tokens": 500
         }
         try:
             res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=20)
@@ -489,7 +463,7 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
         "🔥 <b>{names}</b> — {letter}) variantini tanladingiz. Bu variant mantiqan to'g'ri javobga mutlaqo zid edi!",
         "🔥 <b>{names}</b> — sizlar {letter}) variantiga ishondingiz-a? Tarix va ilmfan bu tanlovingizdan biroz xafa bo'ldi! 😂",
         "🔥 <b>{names}</b> — {letter}) variantini qayerdan topdingiz? Bu variant mavzuga umuman aloqasiz edi!",
-        "🔥 <b>{names}</b> — {letter}) variantini belgilab tavakkal qildingiz, lekin bu safar omadingiz umuman kelmadi!"
+        "🔥 <b>{names}</b> — {letter}) variantini belgilab tavakkal qildingiz, lekin omadingiz kelmadi!"
     ]
 
     fallback_lines = ["\n\n🔥 <b>LOSERS:</b>"]
@@ -503,78 +477,75 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
 # --- Offline Fallback Questions ---
 OFFLINE_BACKUP_QUESTIONS = [
     {
-        "subject": "O'zbekiston Tarixi",
-        "question": "Amir Temur Yevropa qirollari bilan diplomatik yozishmalarda asosan qanday iqtisodiy va strategik shartni ilgari surgan?",
+        "subject": "Mantiq",
+        "question": "Qaysi oydan keyin keladigan oyda 28 kun bor?",
         "options": {
-            "A": "Usmoniylar imperiyasiga qarshi birgalikda dengiz floti ajratish",
-            "B": "Ipak yo'li bo'ylab savdogarlarning erkin harakatlanishi va xavfsizlik kafolati",
-            "C": "Yevropa konlaridan kumush va oltin xomashyosini import qilish",
-            "D": "Ispaniya qirolligi bilan harbiy alyans tuzish"
+            "A": "Yanvar",
+            "B": "Dekabr",
+            "C": "Barcha oylarda",
+            "D": "Faqat Fevral"
         },
-        "correct": "B",
-        "explanation": "Amir Temur Sharl VI va Genrix IV ga yo'llagan maktublarida xalqaro savdo xavfsizligini ta'minlashni asosiy prioritet qilib qo'ygan.",
-        "detailed_explanation": "Amir Temur va Yevropa hukmdorlari o'rtasidagi yozishmalar asosan Ipak yo'lining g'arbiy va sharqiy tarmoqlarida savdo xavfsizligini o'rnatishga qaratilgan edi. U savdogarlarga bojxona imtiyozlari berilishini ta'minlagan.",
-        "source": "Fransiya Qirollik Arxivi (Archives Nationales) — Temur va Sharl VI maktublari"
+        "correct": "C",
+        "explanation": "Yilning har bitta oyida kamida 28 kun bor!",
+        "detailed_explanation": "Bu klassik mantiqiy chalg'ituvchi savol. Odamlar faqat fevral haqida o'ylashadi, ammo 30 va 31 kunlik oylarning hammasida ham 28-kun mavjud.",
+        "source": "Klassik Mantiq Masalalari"
     },
     {
-        "subject": "Fizika va Astronomiya",
-        "question": "Nima uchun neytron yulduzlarning aylanish tezligi uning radiusi qisqargan sari keskin ortib boradi?",
+        "subject": "Psixologiya",
+        "question": "Nima uchun do'konlarda non va sut doim eng orqa burchakka qo'yiladi?",
         "options": {
-            "A": "Magnit maydoni kuchayishi natijasida",
-            "B": "Impuls momentining saqlanish qonuniga ko'ra",
-            "C": "Termoyadroviy reaksiyalar to'xtashi sababli",
-            "D": "Gravitatsion to'lqinlar ajralishi oqibatida"
+            "A": "Tez buzilmasligi uchun",
+            "B": "Xaridor butun do'konni aylanib chiqishi uchun",
+            "C": "Omborxonaga yaqin bo'lgani uchun",
+            "D": "Kassaga xalaqit bermasligi uchun"
         },
         "correct": "B",
-        "explanation": "Impuls momentining saqlanish qonuniga ko'ra, jism radiusi kichrayganda uning burchak tezligi avtomatik ravishda ortadi.",
-        "detailed_explanation": "Aylanayotgan gigant yulduz o'z o'qi atrofida siqilib, neytron yulduziga aylanganda uning inersiya momenti kamayadi va burchak tezligi soniyasiga yuzlab marta aylanish darajasigacha ko'tariladi.",
-        "source": "Astrophysics Journal — Neutron Star Dynamics"
+        "explanation": "Odamlar eng ko'p kerakli mahsulotga yetib borguncha boshqa narsalarni ham sotib olishi uchun marketing hiylasi.",
+        "detailed_explanation": "Barcha supermarketlar kundalik eng zarur tovarlarni eng chetga joylashtiradi, natijada xaridor butun zalni bosib o'tishga majbur bo'ladi.",
+        "source": "Marketing Psixologiyasi va Iste'molchi Xulqi"
     }
 ]
 
-# --- Question Generator (Grounded & Non-Trivia System Prompt) ---
+# --- Question Generator (SHORT, PUNCHY & COOL) ---
 def fetch_question(q_num, recent_history):
-    grade_label, grade_score = get_grade_info(q_num)
-
     if q_num % 4 == 0:
-        chosen_topic = random.choice(ISLAMIC_TOPIC_POOLS)
+        chosen_topic = random.choice(COOL_ISLAMIC_TOPICS)
     else:
-        chosen_topic = random.choice(TOPIC_POOLS)
+        chosen_topic = random.choice(COOL_TOPICS)
 
-    chosen_angle = random.choice(QUESTION_ANGLES)
     cache_buster = f"{int(time.time())}_{random.randint(1000, 9999)}"
     history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "Hozircha yo'q"
 
     prompt = f"""
-    Sen Telegram viktorinasi uchun AKADEMIK, TIZIMLI VA MA'NOLIY SAVOL TUZUVCHISAN.
-    Hozirgi savol raqami: #{q_num} / 1 000 000.
+    Telegram o'yini uchun JUDA QIZIQ, QISQA VA ODAMLARNI HAYRATDA QOLDIRADIGAN savol tuz!
     Unikal kalit: {cache_buster}.
     
-    DARAJA TALABI:
-    - Bosqich: **{grade_label}** ({grade_score}).
-    
     MAVZU: {chosen_topic}
-    USLUB: {chosen_angle}
     
-    QAT'IY QOIDALAR (AI SLOP VA TRIVIANI YO'QOTISH):
-    1. YODLASH SAVOLLARI TAQIQLANADI: Yillar (yilini topish), tildan olinganlik (ma'nosini topish), oddiy nomlarni yodlash savollari UMUMAN BO'LMASIN!
-    2. CHUQUR SABAB-OQIBAT VA MANTIQ: Savol faqat "Nima uchun bu hodisa yuz bergan?", "Ushbu qarorning strategik oqibati nima bo'lgan?", "Qaysi fizik/biologik qonuniyat buni tushuntiradi?" uslubida bo'lsin.
-    3. MANTIQIY VARIANTLAR: A, B, C, D variantlarining barchasi mantiqli va jiddiy ko'rinsin (osonlikcha chiqarib tashlanadigan kulgili variantlar berilmasin).
+    QAT'IY QOIDALAR (HECH QANDAY ZERIKARLI VA UZUN SAVOL BO'LMASIN!):
+    1. SAVOL MAKSIMAL 1-2 QISQA GAP BO'LSIN (10-15 ta so'zdan oshmasin!). Kitobiy, zerikarli va uzun gaplar TUZMA!
+    2. VARIANTLAR (A, B, C, D) MAKSIMAL 2-4 SO'ZDAN IBORAT QISQA BO'LSIN! Hech qanday uzun matn berma!
+    3. FAKT: Odamlar bilmaydigan "vau, shunaqasi ham bormi?" deydigan qiziq, amaliy yoki mantiqiy jumboq bo'lsin.
     4. SO'NGGI SAVOLLAR TAKRORLANMASIN:
     {history_block}
-    5. ANIQ MANBA (SOURCE): 'source' maydonida ushbu fakt aynan qaysi maktab darsligi, ilmiy ensiklopediya, xalqaro arxiv yoki sahih manbadan olinganini ko'rsat (masalan: "O'zbekiston Tarixi 9-sinf darsligi", "Sahihul Buxoriy #128", "NASA Exoplanet Archive").
+    5. MANBA: Manbani qisqa qilib ko'rsat (masalan: "Ginnes Rekordlar Kitobi", "NASA Arxiv", "Psixologiya Fakti").
+
+    NAMUNA USLUB:
+    Savol: Qaysi hayvon umrida bir marta ham suv ichmaydi?
+    A) Kenguru kalamushi
+    B) Sahara iloni
+    C) Tuyaqush
+    D) Koala
 
     Faqat toza JSON formatida javob ber:
     {{
         "subject": "{chosen_topic.split(':')[0].strip()}",
-        "grade": "{grade_label}",
-        "difficulty_score": "{grade_score}",
-        "question": "Savol matni o'zbek tilida",
-        "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}},
+        "question": "Qisqa, qiziq va lo'nda savol matni",
+        "options": {{"A": "Qisqa variant", "B": "Qisqa variant", "C": "Qisqa variant", "D": "Qisqa variant"}},
         "correct": "A",
-        "explanation": "Qisqa tushuntirish (1 gap)",
-        "detailed_explanation": "Kengaytirilgan tahlil va faktlar (2-3 xatboshi)",
-        "source": "Aniq darslik, kitob yoki rasmiy ilmiy manba nomi"
+        "explanation": "Qisqa va qiziq sababi (1 gap)",
+        "detailed_explanation": "Kengaytirilgan qiziq fakt (1-2 xatboshi)",
+        "source": "Qisqa manba nomi"
     }}
     """
 
@@ -593,44 +564,34 @@ def fetch_question(q_num, recent_history):
         payload = {
             "model": model,
             "messages": [
-                {"role": "system", "content": "Sen faqat to'g'ri va akademik JSON qaytaruvchi yordamchisan."},
+                {"role": "system", "content": "Sen faqat qisqa, qiziq va lo'nda JSON qaytaruvchi yordamchisan."},
                 {"role": "user", "content": prompt}
             ],
             "response_format": {"type": "json_object"},
-            "temperature": 0.7
+            "temperature": 0.75
         }
         try:
-            res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=30)
+            res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=25)
             data = res.json()
             if "error" in data:
-                logger.warning(f"Groq {model} error: {data['error'].get('message')}. Retrying next model...")
                 continue
 
             raw_text = data['choices'][0]['message']['content']
             parsed = clean_json_response(raw_text)
             
             if "question" in parsed and "options" in parsed and "correct" in parsed:
-                parsed["grade"] = grade_label
-                parsed["difficulty_score"] = grade_score
                 if "detailed_explanation" not in parsed or not parsed["detailed_explanation"]:
                     parsed["detailed_explanation"] = parsed.get("explanation", "")
                 if "source" not in parsed or not parsed["source"]:
-                    parsed["source"] = "Rasmiy ta'lim va akademik manbalar"
-                logger.info(f"Groq generated successfully using {model}: {parsed['question'][:40]}...")
+                    parsed["source"] = "Ilmiy va Tarixiy Qiziq Faktlar"
+                logger.info(f"Generated successfully: {parsed['question'][:40]}...")
                 return parsed
 
         except Exception as e:
-            logger.warning(f"Model {model} failed ({e}). Trying next model...")
+            logger.warning(f"Model {model} failed: {e}")
 
-    logger.error("All Groq models failed. Deploying diverse offline backup question.")
-    available_backups = [
-        q for q in OFFLINE_BACKUP_QUESTIONS 
-        if not any(q["question"][:30] in h for h in recent_history)
-    ]
-    selected_backup = random.choice(available_backups if available_backups else OFFLINE_BACKUP_QUESTIONS).copy()
-    selected_backup["grade"] = grade_label
-    selected_backup["difficulty_score"] = grade_score
-    return selected_backup
+    logger.error("All Groq models failed. Deploying fallback.")
+    return random.choice(OFFLINE_BACKUP_QUESTIONS).copy()
 
 # --- Intake Window Evaluator per Group ---
 async def evaluate_initial_window(app, chat_id: int, target_q_num: int):
@@ -717,6 +678,7 @@ async def evaluate_initial_window(app, chat_id: int, target_q_num: int):
             f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
         )
         sent_reveal = await app.bot.send_message(chat_id, reply, parse_mode="HTML")
+        # Wipe question and result 60 seconds after answer is revealed
         track_for_cleanup(chat_id, sent_reveal.message_id, delay_seconds=EXPIRE_CLEANUP_SECONDS)
         track_for_cleanup(chat_id, round_st.get("message_id"), delay_seconds=EXPIRE_CLEANUP_SECONDS)
 
@@ -818,19 +780,16 @@ async def post_hourly_question(app):
             round_st["options"] = data["options"]
             round_st["explanation"] = data["explanation"]
             round_st["detailed_explanation"] = data.get("detailed_explanation", data["explanation"])
-            round_st["source"] = data.get("source", "Rasmiy ta'lim va akademik manbalar")
+            round_st["source"] = data.get("source", "Qiziq Faktlar")
             round_st["question_text"] = data["question"]
             round_st["attempted_users"].clear()
             round_st["answers"].clear()
             round_st["answered_names"].clear()
             round_st["in_initial_window"] = True
             
-            grade_label = data.get("grade", "5-sinf")
-            diff_score = data.get("difficulty_score", "1/10")
-            
             msg_text = (
                 f"🏆 1 MILLION QUESTIONS · #{q_num:07d}\n"
-                f"📚 Fan: {data['subject']} | 🎓 Bosqich: {grade_label} ({diff_score})\n\n"
+                f"🎯 Mavzu: {data['subject']}\n\n"
                 f"❓ {data['question']}\n\n"
                 f"A) {data['options']['A']}\n"
                 f"B) {data['options']['B']}\n"
@@ -843,7 +802,6 @@ async def post_hourly_question(app):
             round_st["base_text"] = msg_text
             sent_msg = await app.bot.send_message(chat_id, msg_text)
             round_st["message_id"] = sent_msg.message_id
-            track_for_cleanup(chat_id, sent_msg.message_id, delay_seconds=EXPIRE_CLEANUP_SECONDS + 300)
             logger.info(f"Question #{q_num} posted in {chat_id}.")
             asyncio.create_task(evaluate_initial_window(app, chat_id, q_num))
         except Exception as e:
