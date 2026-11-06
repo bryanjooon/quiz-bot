@@ -9,7 +9,7 @@ import threading
 from http.server import HTTPServer, BaseHTTPRequestHandler
 from datetime import datetime
 import pytz
-import requests
+import httpx
 from telegram import Update
 from telegram.ext import (
     ApplicationBuilder,
@@ -45,12 +45,12 @@ CYRILLIC_TO_LATIN = {
 }
 
 INITIAL_WINDOW_SECONDS = 30
-EXPIRE_CLEANUP_SECONDS = 60  # Wiped 1 minute after answer is revealed
+EXPIRE_CLEANUP_SECONDS = 60
 GLOBAL_USER_NAME = "biloliddin"
 
 # --- Persistent Scores Storage per Chat ID ---
 SCORES_FILE = "scores.json"
-ALL_SCORES = {}  # { chat_id_str: { player_name: score } }
+ALL_SCORES = {}
 
 def load_scores():
     global ALL_SCORES
@@ -120,7 +120,7 @@ async def message_cleaner_task(bot):
                         await bot.delete_message(chat_id=item["chat_id"], message_id=item["message_id"])
                         logger.info(f"Purged expired message {item['message_id']} from chat {item['chat_id']}")
                     except Exception as e:
-                        logger.warning(f"Could not delete message {item['message_id']} in {item['chat_id']}: {e}")
+                        logger.debug(f"Could not delete message {item['message_id']} in {item['chat_id']}: {e}")
                 else:
                     remaining.append(item)
             MESSAGES_TO_PURGE[:] = remaining
@@ -135,21 +135,16 @@ VULGAR_PATTERNS = [
     r"na[hx]u[iyj]\w*", r"nah\b", r"nax\b", r"нах\b", r"наху[йяеё]\w*", r"поху[йяеё]\w*",
     r"ху[йяеёи]\w*", r"xuy\w*", r"пизд\w*", r"pizd\w*", r"бля\w*", r"blya\w*",
     r"еба\w*", r"ёб\w*", r"yob\w*", r"yeb\w*", r"сука\w*", r"сучк\w*", r"suka\w*",
-    r"suchk\w*", r"мудак\w*", r"mudak\w*", r"гандон\w*", r"gandon\w*", r"презерватив\w*",
+    r"suchk\w*", r"мудак\w*", r"mudak\w*", r"гандон\w*", r"gandon\w*",
     r"лох\w*", r"lox\w*", r"чмо\w*", r"chmo\w*", r"дебил\w*", r"debil\w*",
     r"далба[её]б\w*", r"dalba[ye]ob\w*",
     r"y+e*b+a+[nŋ]\w*", r"e+b+a+[nŋ]\w*", r"y+e*b+l+a+[nŋ]\w*", r"e+b+l+a+[nŋ]\w*",
-    r"[её]+б+а+[нң]\w*", r"[её]+б+л+а+[нң]\w*", r"й+е+б+а+[нң]\w*", r"и+б+а+[нң]\w*", r"ы+б+а+[нң]\w*",
     r"jalap\w*", r"jala\b", r"жалап\w*", r"жалаб\w*", r"qanjiq\w*", r"қанжиқ\w*",
     r"sik\w*", r"сики\w*", r"сик\w*", r"qo[t']oq\w*", r"қотоқ\w*", r"onangni\w*",
-    r"otangni\w*", r"ona[nŋ]g\w*", r"itvachcha\w*", r"padariga\w*", r"iflos\w*",
-    r"xezalak\w*", r"гей\w*", r"gey\w*",
+    r"otangni\w*", r"ona[nŋ]g\w*", r"itvachcha\w*", r"padariga\w*", r"iflos\w*"
 ]
 
-LEET_MAP = str.maketrans({
-    '@': 'a', '4': 'a', '0': 'o', '1': 'i', '!': 'i', '$': 's', '3': 'e', 'x': 'h',
-})
-
+LEET_MAP = str.maketrans({'@': 'a', '4': 'a', '0': 'o', '1': 'i', '!': 'i', '$': 's', '3': 'e', 'x': 'h'})
 CUSTOM_BANNED_FILE = "banned_words.json"
 CUSTOM_BANNED_WORDS = set()
 
@@ -194,22 +189,37 @@ def is_vulgar(text: str) -> bool:
 
 ANSWER_PATTERN = re.compile(r"^\s*([A-Da-dА-Ва-вСсДд])[.)]?\s*$")
 
-# Cool, interesting, practical subjects
-COOL_TOPICS = [
-    "Mantiq va Detektiv jumboqlari (qotillik, o'g'irlik, mantiqiy paradoks)",
-    "Inson psixologiyasi va miya fokuslari (kognitiv xatolar, qiziq tajribalar)",
-    "Koinot sirlari va qora tuynuklar (kutilmagan g'aroyib hodisalar)",
-    "Tarixdagi eng aqlbovar qilmas va kulgili harbiy strategiyalar",
-    "G'aroyib tabiat va maxluqlar (dengiz tubi, zaharli hayvonlar hiylalari)",
-    "Dunyo sirlari va eng qiziq geografik anomaliyalar",
-    "Kriptografiya, xakerlik va internet sirlari",
-    "Amir Temur va buyuk sarkardalarning kutilmagan harbiy fokuslari"
-]
+# --- Rich & Broad Topics Matrix ---
+EXPANDED_TOPICS = [
+    # Islamic History & Prophets
+    "Prophets in Islam: unique wisdom, historical context, and unexpected authentic details",
+    "Islamic Golden Age: Bayt al-Hikma, groundbreaking medical/astronomical discoveries, trade routes",
+    "Major Islamic historical events: Battles, Treaty of Hudaybiyyah, Andalusia scholarship, architectural feats",
+    "Sahaba diplomacy, strategies, jurisprudence puzzles, and linguistic mastery",
 
-COOL_ISLAMIC_TOPICS = [
-    "Islom tarixi: Sahobalarning zukkoligi, diplomatik hiylalari va xushmuomalaligi",
-    "Baytul-Hikma: Musulmon olimlarining dunyoni o'zgartirgan kashfiyotlari",
-    "Qur'on va Sunnatdagi aqlbovar qilmas mantiqiy va ilmiy dalillar"
+    # Global & Uzbek Literature
+    "Uzbek Literature: Alisher Navoi's riddles/epics, Babur's memoirs, Jadid thinkers (Fitrat, Cho'lpon, Abdulla Qodiriy)",
+    "World Literature: Masterpieces by Dostoevsky, Orwell, Kafka, Hemingway, Shakespeare, Gabriel García Márquez",
+    "Literary symbolism, legendary origins of famous epics, hidden backstories of historically banned books",
+
+    # Global & Uzbek History
+    "Uzbek & Central Asian History: Samanids, Khwarazmian Empire, Ulugh Beg's observatory, Silk Road geopolitics",
+    "Ancient World: Rome, Carthage, Ancient Egypt, Persian Empire, obscure military tactics and inventions",
+    "Modern Geopolitics & Cold War: Space race twists, declassified espionage incidents, crucial diplomatic bluffs",
+
+    # Law, Politics & Uzbek Constitution
+    "Uzbekistan Constitution: Fundamental rights, separation of powers, historic amendments, state symbols origin",
+    "Political philosophy & jurisprudence: Magna Carta, separation of powers, weird real-world legal precedents",
+    "Constitutional dilemmas: Free speech limits, emergency powers, voting mechanics, citizenship paradoxes",
+
+    # Real Detective & Logical Deductions
+    "Forensic science & criminalistics: Fingerprint/ballistics history, poisoning signatures, Locard's exchange principle",
+    "Real historical detective mysteries: Broken alibis, forgery detection, coded ciphers actually solved in history",
+    "Rigorous deductive logic puzzles: Causation vs correlation, paradoxes with objective mathematical/logical resolutions",
+
+    # Human Psychology & Science
+    "Behavioral economics & cognitive biases: Prospect theory, anchoring effect, halo effect, bystander experiments",
+    "Astronomy & Physics: Quantum anomalies, relativity thought experiments, planetary geology"
 ]
 
 def create_empty_round():
@@ -217,7 +227,8 @@ def create_empty_round():
         "active": False,
         "q_num": 1,
         "correct": None,
-        "options": {},
+        "options_en": {},
+        "options_uz": {},
         "explanation": "",
         "detailed_explanation": "",
         "source": "",
@@ -374,15 +385,15 @@ def format_izoh_block(explanation: str, detailed: str, source: str = "") -> str:
     clean_detail = escape_tg_html(detailed)
     clean_src = escape_tg_html(source)
     
-    src_line = f"\n📚 <b>Manba:</b> {clean_src}" if clean_src else ""
+    src_line = f"\n📚 <b>Source:</b> {clean_src}" if clean_src else ""
 
     if clean_detail and clean_detail.strip() != clean_expl.strip():
         return (
-            f"💡 <b>Izoh:</b> {clean_expl}{src_line}\n\n"
-            f"<blockquote expandable>📖 <b>Batafsil ma'lumot (o'qish uchun bosing):</b>\n\n"
+            f"💡 <b>Explanation:</b> {clean_expl}{src_line}\n\n"
+            f"<blockquote expandable>📖 <b>Detailed Context:</b>\n\n"
             f"{clean_detail}</blockquote>"
         )
-    return f"💡 <b>Izoh:</b> {clean_expl}{src_line}"
+    return f"💡 <b>Explanation:</b> {clean_expl}{src_line}"
 
 def format_leaderboard_block(leaderboard_str: str) -> str:
     clean_lb = escape_tg_html(leaderboard_str)
@@ -400,8 +411,8 @@ def clean_json_response(raw_text: str) -> dict:
         cleaned = match.group(0)
     return json.loads(cleaned)
 
-# --- Groq Dynamic Roast Generator ---
-def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses_grouped):
+# --- Asynchronous Dynamic Roast Generator ---
+async def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses_grouped):
     if not wrong_guesses_grouped:
         return ""
 
@@ -413,21 +424,21 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
     wrong_str = "\n".join(wrong_block)
 
     prompt = f"""
-    Sen Telegram viktorinasi uchun ENG KULGILI, O'TKIR VA AQLLI "ROASTER"SAN.
-    Ishtirokchilar noto'g'ri javob berishdi. Sening vazifang ularni SHAXSAN nomma-nom aytib, tanlagan varianti uchun samimiy va ma'lumot beruvchi tarzda kulgili tanqid qilish.
+Sen Telegram viktorinasi uchun ENG KULGILI, O'TKIR VA AQLLI "ROASTER"SAN.
+Ishtirokchilar noto'g'ri javob berishdi. Sening vazifang ularni SHAXSAN nomma-nom aytib, tanlagan varianti uchun samimiy va ma'lumot beruvchi tarzda kulgili tanqid qilish.
 
-    SAVOL: {question_text}
-    TO'G'RI JAVOB: {correct_letter}) {correct_text}
+SAVOL: {question_text}
+TO'G'RI JAVOB: {correct_letter}) {correct_text}
 
-    NOTO'G'RI TAXMIN QILGANLAR VA ULARNING VARIANTLARI:
-    {wrong_str}
+NOTO'G'RI TAXMIN QILGANLAR VA ULARNING VARIANTLARI:
+{wrong_str}
 
-    QAT'IY TALABLAR:
-    1. Aholini SHAXSAN va VARIANTMA-VARIANT nomma-nom aytib roast qil!
-    2. Har bir guruh/odam uchun ularning variantini MANTIQAN VA ILMIY/TARIXIY tomondan nima uchun xato ekanligini 1-2 gapda achchiq va kulgili qilib tushuntir.
-    3. Aslo bir xil takroriy gaplar ISHLATMA!
-    4. Hech qanday sarlavha ("Roast:", "Losers:") YOZMA!
-    """
+QAT'IY TALABLAR:
+1. Aholini SHAXSAN va VARIANTMA-VARIANT nomma-nom aytib roast qil!
+2. Har bir guruh/odam uchun ularning variantini MANTIQAN VA ILMIY/TARIXIY tomondan nima uchun xato ekanligini 1-2 gapda achchiq va kulgili qilib tushuntir.
+3. Aslo bir xil takroriy gaplar ISHLATMA!
+4. Hech qanday sarlavha ("Roast:", "Losers:") YOZMA!
+"""
 
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -439,25 +450,26 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
         "qwen/qwen3.8-27b"
     ]
 
-    for model in models_to_try:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "Sen o'zbek tilida juda kulgili, o'tkir va aqlli viktorina botisan."},
-                {"role": "user", "content": prompt}
-            ],
-            "temperature": 0.85,
-            "max_tokens": 500
-        }
-        try:
-            res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=20)
-            data = res.json()
-            if "choices" in data and len(data["choices"]) > 0:
-                roast_text = data["choices"][0]["message"]["content"].strip()
-                if roast_text:
-                    return f"\n\n🔥 <b>LOSERS:</b>\n{roast_text}"
-        except Exception as e:
-            logger.warning(f"Roast model {model} failed: {e}")
+    async with httpx.AsyncClient(timeout=20.0) as client:
+        for model in models_to_try:
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "Sen o'zbek tilida juda kulgili, o'tkir va aqlli viktorina botisan."},
+                    {"role": "user", "content": prompt}
+                ],
+                "temperature": 0.85,
+                "max_tokens": 500
+            }
+            try:
+                res = await client.post(GROQ_URL, headers=headers, json=payload)
+                data = res.json()
+                if "choices" in data and len(data["choices"]) > 0:
+                    roast_text = data["choices"][0]["message"]["content"].strip()
+                    if roast_text:
+                        return f"\n\n🔥 <b>LOSERS:</b>\n{roast_text}"
+            except Exception as e:
+                logger.warning(f"Roast model {model} failed: {e}")
 
     ROAST_TEMPLATES = [
         "🔥 <b>{names}</b> — {letter}) variantini tanladingiz. Bu variant mantiqan to'g'ri javobga mutlaqo zid edi!",
@@ -477,77 +489,85 @@ def generate_dynamic_roast(question_text, options, correct_letter, wrong_guesses
 # --- Offline Fallback Questions ---
 OFFLINE_BACKUP_QUESTIONS = [
     {
-        "subject": "Mantiq",
-        "question": "Qaysi oydan keyin keladigan oyda 28 kun bor?",
-        "options": {
-            "A": "Yanvar",
-            "B": "Dekabr",
-            "C": "Barcha oylarda",
-            "D": "Faqat Fevral"
+        "category": "Constitutional Law & History",
+        "question_en": "Which 1215 English charter first established that the monarch was not above the law?",
+        "options_en": {
+            "A": "Magna Carta",
+            "B": "Habeas Corpus Act",
+            "C": "Bill of Rights",
+            "D": "Petition of Right"
         },
-        "correct": "C",
-        "explanation": "Yilning har bitta oyida kamida 28 kun bor!",
-        "detailed_explanation": "Bu klassik mantiqiy chalg'ituvchi savol. Odamlar faqat fevral haqida o'ylashadi, ammo 30 va 31 kunlik oylarning hammasida ham 28-kun mavjud.",
-        "source": "Klassik Mantiq Masalalari"
+        "question_uz": "Qaysi 1215-yilgi Angliya xartiyasi birinchi bo'lib monarx ham qonundan ustun emasligini belgilab qo'ygan?",
+        "options_uz": {
+            "A": "Magna Carta",
+            "B": "Xabeas Korpus Akti",
+            "C": "Huquqlar Billi",
+            "D": "Huquq to'g'risidagi petitsiya"
+        },
+        "correct": "A",
+        "explanation": "Magna Carta (1215) forced King John to accept limits on royal sovereignty.",
+        "detailed_explanation": "Drafted by the Archbishop of Canterbury, it promised the protection of church rights and limited feudal payments to the Crown.",
+        "source": "British Library Constitutional Archives"
     },
     {
-        "subject": "Psixologiya",
-        "question": "Nima uchun do'konlarda non va sut doim eng orqa burchakka qo'yiladi?",
-        "options": {
-            "A": "Tez buzilmasligi uchun",
-            "B": "Xaridor butun do'konni aylanib chiqishi uchun",
-            "C": "Omborxonaga yaqin bo'lgani uchun",
-            "D": "Kassaga xalaqit bermasligi uchun"
+        "category": "Islamic History & Scholarship",
+        "question_en": "Which polymath wrote 'The Canon of Medicine', standardizing medical education for six centuries?",
+        "options_en": {
+            "A": "Al-Zahrawi",
+            "B": "Ibn Sina (Avicenna)",
+            "C": "Al-Razi",
+            "D": "Ibn Rushd"
+        },
+        "question_uz": "Tibbiyot ta'limini 6 asr davomida standartlashtirgan 'Tib qonunlari' asarini qaysi alloma yozgan?",
+        "options_uz": {
+            "A": "Zahroviy",
+            "B": "Ibn Sino",
+            "C": "Roziy",
+            "D": "Ibn Rushd"
         },
         "correct": "B",
-        "explanation": "Odamlar eng ko'p kerakli mahsulotga yetib borguncha boshqa narsalarni ham sotib olishi uchun marketing hiylasi.",
-        "detailed_explanation": "Barcha supermarketlar kundalik eng zarur tovarlarni eng chetga joylashtiradi, natijada xaridor butun zalni bosib o'tishga majbur bo'ladi.",
-        "source": "Marketing Psixologiyasi va Iste'molchi Xulqi"
+        "explanation": "Ibn Sina wrote 'The Canon of Medicine', remaining a cornerstone in Europe and Asia until the 1650s.",
+        "detailed_explanation": "Completed in 1025, it introduced systematic clinical trials, quarantine principles, and categorized pharmacology.",
+        "source": "History of Islamic Science"
     }
 ]
 
-# --- Question Generator (SHORT, PUNCHY & COOL) ---
-def fetch_question(q_num, recent_history):
-    if q_num % 4 == 0:
-        chosen_topic = random.choice(COOL_ISLAMIC_TOPICS)
-    else:
-        chosen_topic = random.choice(COOL_TOPICS)
-
+# --- Asynchronous Question Generator (English Question + Uzbek Expandable) ---
+async def fetch_question(q_num, recent_history):
+    chosen_topic = random.choice(EXPANDED_TOPICS)
     cache_buster = f"{int(time.time())}_{random.randint(1000, 9999)}"
-    history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "Hozircha yo'q"
+    history_block = "\n".join([f"- {item}" for item in recent_history]) if recent_history else "None yet"
 
     prompt = f"""
-    Telegram o'yini uchun JUDA QIZIQ, QISQA VA ODAMLARNI HAYRATDA QOLDIRADIGAN savol tuz!
-    Unikal kalit: {cache_buster}.
-    
-    MAVZU: {chosen_topic}
-    
-    QAT'IY QOIDALAR (HECH QANDAY ZERIKARLI VA UZUN SAVOL BO'LMASIN!):
-    1. SAVOL MAKSIMAL 1-2 QISQA GAP BO'LSIN (10-15 ta so'zdan oshmasin!). Kitobiy, zerikarli va uzun gaplar TUZMA!
-    2. VARIANTLAR (A, B, C, D) MAKSIMAL 2-4 SO'ZDAN IBORAT QISQA BO'LSIN! Hech qanday uzun matn berma!
-    3. FAKT: Odamlar bilmaydigan "vau, shunaqasi ham bormi?" deydigan qiziq, amaliy yoki mantiqiy jumboq bo'lsin.
-    4. SO'NGGI SAVOLLAR TAKRORLANMASIN:
-    {history_block}
-    5. MANBA: Manbani qisqa qilib ko'rsat (masalan: "Ginnes Rekordlar Kitobi", "NASA Arxiv", "Psixologiya Fakti").
+You are an elite quizmaster crafting intellectual, punchy, and engaging questions.
+TOPIC: {chosen_topic}
+Unique Seed: {cache_buster}
 
-    NAMUNA USLUB:
-    Savol: Qaysi hayvon umrida bir marta ham suv ichmaydi?
-    A) Kenguru kalamushi
-    B) Sahara iloni
-    C) Tuyaqush
-    D) Koala
+RECENT QUESTIONS (DO NOT REPEAT TOPICS OR ANSWERS):
+{history_block}
 
-    Faqat toza JSON formatida javob ber:
-    {{
-        "subject": "{chosen_topic.split(':')[0].strip()}",
-        "question": "Qisqa, qiziq va lo'nda savol matni",
-        "options": {{"A": "Qisqa variant", "B": "Qisqa variant", "C": "Qisqa variant", "D": "Qisqa variant"}},
-        "correct": "A",
-        "explanation": "Qisqa va qiziq sababi (1 gap)",
-        "detailed_explanation": "Kengaytirilgan qiziq fakt (1-2 xatboshi)",
-        "source": "Qisqa manba nomi"
-    }}
-    """
+STRICT INSTRUCTIONS:
+1. QUESTION & OPTIONS: The primary question and options (A, B, C, D) MUST be in natural, punchy, articulate ENGLISH. (Question: 12-25 words max; Options: 1-4 words each).
+2. UZBEK TRANSLATION: Provide a natural, accurate Uzbek translation of both the question and the options.
+3. DOMAIN ACCURACY:
+   - Detective/Forensic: Must follow real-world criminalistics, logical paradoxes, or physical deduction.
+   - Islamic/Prophets: Must rely on authentic historical/theological context, wisdom, and scholarship.
+   - Literature & History: Focus on surprising facts, hidden motivations, or pivotal geopolitical treaties.
+   - Law & Constitution: Focus on real legal principles, rights, and foundational articles.
+
+Output STRICTLY valid JSON with no markdown wrapping:
+{{
+    "category": "{chosen_topic.split(':')[0].strip()}",
+    "question_en": "Punchy English question?",
+    "options_en": {{"A": "Option text", "B": "Option text", "C": "Option text", "D": "Option text"}},
+    "question_uz": "Savolning o'zbekcha tarjimasi?",
+    "options_uz": {{"A": "A varianti", "B": "B varianti", "C": "C varianti", "D": "D varianti"}},
+    "correct": "A",
+    "explanation": "Direct 1-2 sentence explanation in English.",
+    "detailed_explanation": "Detailed 2-3 sentence context in English.",
+    "source": "Credible Book, Treaty, Historical Record, or Journal"
+}}
+"""
 
     headers = {
         "Authorization": f"Bearer {GROQ_API_KEY}",
@@ -560,35 +580,40 @@ def fetch_question(q_num, recent_history):
         "openai/gpt-oss-20b"
     ]
 
-    for model in models_to_try:
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": "Sen faqat qisqa, qiziq va lo'nda JSON qaytaruvchi yordamchisan."},
-                {"role": "user", "content": prompt}
-            ],
-            "response_format": {"type": "json_object"},
-            "temperature": 0.75
-        }
-        try:
-            res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=25)
-            data = res.json()
-            if "error" in data:
-                continue
+    async with httpx.AsyncClient(timeout=25.0) as client:
+        for model in models_to_try:
+            payload = {
+                "model": model,
+                "messages": [
+                    {"role": "system", "content": "You return strictly valid JSON objects."},
+                    {"role": "user", "content": prompt}
+                ],
+                "response_format": {"type": "json_object"},
+                "temperature": 0.8
+            }
+            try:
+                res = await client.post(GROQ_URL, headers=headers, json=payload)
+                data = res.json()
+                if "error" in data:
+                    continue
 
-            raw_text = data['choices'][0]['message']['content']
-            parsed = clean_json_response(raw_text)
-            
-            if "question" in parsed and "options" in parsed and "correct" in parsed:
-                if "detailed_explanation" not in parsed or not parsed["detailed_explanation"]:
-                    parsed["detailed_explanation"] = parsed.get("explanation", "")
-                if "source" not in parsed or not parsed["source"]:
-                    parsed["source"] = "Ilmiy va Tarixiy Qiziq Faktlar"
-                logger.info(f"Generated successfully: {parsed['question'][:40]}...")
-                return parsed
-
-        except Exception as e:
-            logger.warning(f"Model {model} failed: {e}")
+                raw_text = data['choices'][0]['message']['content']
+                parsed = clean_json_response(raw_text)
+                
+                if "question_en" in parsed and "options_en" in parsed and "correct" in parsed:
+                    if "question_uz" not in parsed:
+                        parsed["question_uz"] = parsed["question_en"]
+                    if "options_uz" not in parsed:
+                        parsed["options_uz"] = parsed["options_en"]
+                    if "detailed_explanation" not in parsed or not parsed["detailed_explanation"]:
+                        parsed["detailed_explanation"] = parsed.get("explanation", "")
+                    if "source" not in parsed or not parsed["source"]:
+                        parsed["source"] = "Historical & Scientific Records"
+                    
+                    logger.info(f"Generated successfully: {parsed['question_en'][:40]}...")
+                    return parsed
+            except Exception as e:
+                logger.warning(f"Model {model} failed: {e}")
 
     logger.error("All Groq models failed. Deploying fallback.")
     return random.choice(OFFLINE_BACKUP_QUESTIONS).copy()
@@ -618,7 +643,7 @@ async def evaluate_initial_window(app, chat_id: int, target_q_num: int):
     wrong_grouped = {}
     for ans in wrong_answers:
         letter = ans["choice"]
-        name = ans["user"].first_name or "O'yinchi"
+        name = ans["user"].first_name or "Player"
         if letter not in wrong_grouped:
             wrong_grouped[letter] = []
         wrong_grouped[letter].append(name)
@@ -633,10 +658,10 @@ async def evaluate_initial_window(app, chat_id: int, target_q_num: int):
 
         for idx, ans in enumerate(correct_answers[:3]):
             user = ans["user"]
-            name = user.first_name or "O‘yinchi"
+            name = user.first_name or "Player"
             pts = points_map[idx]
             update_player_score(chat_id, name, pts)
-            winners_lines.append(f"{medals[idx]} {escape_tg_html(name)} — +{pts} ball ({idx + 1}-o‘rin)")
+            winners_lines.append(f"{medals[idx]} {escape_tg_html(name)} — +{pts} pts ({idx + 1}-place)")
 
         chat_scores = get_chat_scores(chat_id)
         leaderboard_str = await update_pin(
@@ -647,11 +672,12 @@ async def evaluate_initial_window(app, chat_id: int, target_q_num: int):
             new_question_summary=round_st["question_text"]
         )
 
-        ans_text = round_st["options"].get(correct_choice, "")
+        ans_text = round_st["options_en"].get(correct_choice, "")
+        ans_uz_text = round_st["options_uz"].get(correct_choice, "")
         winners_block = "\n".join(winners_lines)
 
         extra_correct = len(correct_answers) - 3
-        extra_note = f"\n👏 Yana {extra_correct} kishi to‘g‘ri topdi, ammo shohsupaga ulgurmadi!" if extra_correct > 0 else ""
+        extra_note = f"\n👏 {extra_correct} more player(s) answered correctly, but missed the podium!" if extra_correct > 0 else ""
 
         izoh_formatted = format_izoh_block(
             round_st['explanation'], 
@@ -660,32 +686,33 @@ async def evaluate_initial_window(app, chat_id: int, target_q_num: int):
         )
         rating_formatted = format_leaderboard_block(leaderboard_str)
         
-        roast_section = generate_dynamic_roast(
+        roast_section = await generate_dynamic_roast(
             round_st["question_text"],
-            round_st["options"],
+            round_st["options_en"],
             correct_choice,
             wrong_grouped
         )
 
+        display_uz = f" ({ans_uz_text})" if ans_uz_text and ans_uz_text != ans_text else ""
+
         reply = (
-            f"⏰ <b>30 SONIYA TUGADI!</b>\n\n"
-            f"🎯 <b>TO‘G‘RI JAVOB:</b> {correct_choice}) {escape_tg_html(ans_text)}\n"
+            f"⏰ <b>30 SECONDS OVER!</b>\n\n"
+            f"🎯 <b>CORRECT ANSWER:</b> {correct_choice}) {escape_tg_html(ans_text)}{escape_tg_html(display_uz)}\n"
             f"{izoh_formatted}\n\n"
-            f"⚡ <b>G‘OLIBLAR VA BALLAR:</b>\n"
+            f"⚡ <b>WINNERS & PODIUM:</b>\n"
             f"{winners_block}{extra_note}"
             f"{roast_section}\n\n"
             f"{rating_formatted}\n\n"
             f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
         )
         sent_reveal = await app.bot.send_message(chat_id, reply, parse_mode="HTML")
-        # Wipe question and result 60 seconds after answer is revealed
         track_for_cleanup(chat_id, sent_reveal.message_id, delay_seconds=EXPIRE_CLEANUP_SECONDS)
         track_for_cleanup(chat_id, round_st.get("message_id"), delay_seconds=EXPIRE_CLEANUP_SECONDS)
 
     else:
-        roast_section = generate_dynamic_roast(
+        roast_section = await generate_dynamic_roast(
             round_st["question_text"],
-            round_st["options"],
+            round_st["options_en"],
             correct_choice,
             wrong_grouped
         )
@@ -709,7 +736,7 @@ async def post_hourly_question(app):
                 round_st["active"] = False
                 prev_q_num = round_st["q_num"]
                 prev_correct = round_st["correct"]
-                prev_ans = round_st["options"].get(prev_correct, "")
+                prev_ans = round_st["options_en"].get(prev_correct, "")
                 prev_expl = round_st["explanation"]
                 prev_detailed = round_st["detailed_explanation"]
                 prev_source = round_st.get("source", "")
@@ -728,12 +755,12 @@ async def post_hourly_question(app):
                 wrong_grouped = {}
                 for ans in wrong_answers:
                     letter = ans["choice"]
-                    name = ans["user"].first_name or "O'yinchi"
+                    name = ans["user"].first_name or "Player"
                     if letter not in wrong_grouped:
                         wrong_grouped[letter] = []
                     wrong_grouped[letter].append(name)
 
-                leaderboard_str = await update_pin(
+                await update_pin(
                     app.bot,
                     chat_id=chat_id,
                     next_q_num=prev_q_num + 1,
@@ -742,17 +769,17 @@ async def post_hourly_question(app):
                 )
 
                 izoh_formatted = format_izoh_block(prev_expl, prev_detailed, prev_source)
-                roast_section = generate_dynamic_roast(
+                roast_section = await generate_dynamic_roast(
                     prev_q_text,
-                    round_st["options"],
+                    round_st["options_en"],
                     prev_correct,
                     wrong_grouped
                 )
 
                 timeout_msg = (
-                    f"⏰ <b>VAQT TUGADI!</b> (#{prev_q_num:07d})\n\n"
+                    f"⏰ <b>TIME'S UP!</b> (#{prev_q_num:07d})\n\n"
                     f"Hech kim to‘g‘ri javob bera olmadi.\n"
-                    f"✅ <b>To‘g‘ri javob:</b> {prev_correct}) {escape_tg_html(prev_ans)}\n"
+                    f"✅ <b>Correct Answer:</b> {prev_correct}) {escape_tg_html(prev_ans)}\n"
                     f"{izoh_formatted}"
                     f"{roast_section}\n\n"
                     f"⚡ Keyingi savol chiqmoqda..."
@@ -768,7 +795,7 @@ async def post_hourly_question(app):
     pin = await get_or_create_leaderboard(app.bot, sample_chat)
     q_num, _, history = parse_pin_data(getattr(pin, "text", "") or "", sample_chat)
     
-    data = fetch_question(q_num, history)
+    data = await fetch_question(q_num, history)
 
     for chat_id in GROUP_CHAT_IDS:
         try:
@@ -777,30 +804,45 @@ async def post_hourly_question(app):
             round_st["active"] = True
             round_st["q_num"] = q_num
             round_st["correct"] = data["correct"].upper()
-            round_st["options"] = data["options"]
+            round_st["options_en"] = data["options_en"]
+            round_st["options_uz"] = data.get("options_uz", {})
             round_st["explanation"] = data["explanation"]
             round_st["detailed_explanation"] = data.get("detailed_explanation", data["explanation"])
-            round_st["source"] = data.get("source", "Qiziq Faktlar")
-            round_st["question_text"] = data["question"]
+            round_st["source"] = data.get("source", "Historical & Scientific Records")
+            round_st["question_text"] = data["question_en"]
             round_st["attempted_users"].clear()
             round_st["answers"].clear()
             round_st["answered_names"].clear()
             round_st["in_initial_window"] = True
             
+            # Format Uzbek Expandable Block
+            uz_options = "\n".join([
+                f"<b>{k})</b> {escape_tg_html(v)}" 
+                for k, v in data.get("options_uz", {}).items()
+            ])
+            uzbek_expandable = (
+                f"<blockquote expandable>"
+                f"🇺🇿 <b>O'zbekcha tarjimasi:</b>\n"
+                f"{escape_tg_html(data.get('question_uz', ''))}\n\n"
+                f"{uz_options}"
+                f"</blockquote>"
+            )
+
             msg_text = (
-                f"🏆 1 MILLION QUESTIONS · #{q_num:07d}\n"
-                f"🎯 Mavzu: {data['subject']}\n\n"
-                f"❓ {data['question']}\n\n"
-                f"A) {data['options']['A']}\n"
-                f"B) {data['options']['B']}\n"
-                f"C) {data['options']['C']}\n"
-                f"D) {data['options']['D']}\n\n"
-                f"⚡ Variantni yozing (A, B, C yoki D)!\n"
-                f"⏳ Dastlabki 30 soniya ichida eng tez topgan 3 kishi ball oladi (🥇10, 🥈5, 🥉3)!\n"
-                f"🤫 Javobingiz bot tomonidan o‘chirilib, quyidagi ro‘yxatga kiritiladi."
+                f"🏆 <b>1 MILLION QUESTIONS · #{q_num:07d}</b>\n"
+                f"🏷 <i>{escape_tg_html(data.get('category', 'Trivia'))}</i>\n\n"
+                f"❓ <b>{escape_tg_html(data['question_en'])}</b>\n\n"
+                f"<b>A)</b> {escape_tg_html(data['options_en']['A'])}\n"
+                f"<b>B)</b> {escape_tg_html(data['options_en']['B'])}\n"
+                f"<b>C)</b> {escape_tg_html(data['options_en']['C'])}\n"
+                f"<b>D)</b> {escape_tg_html(data['options_en']['D'])}\n\n"
+                f"{uzbek_expandable}\n\n"
+                f"⚡ <i>Send <b>A</b>, <b>B</b>, <b>C</b>, or <b>D</b> to answer!</i>\n"
+                f"⏱ <i>First 30s top 3 fastest get: 🥇10, 🥈5, 🥉3 pts.</i>\n"
+                f"🤫 <i>Javobingiz bot tomonidan o‘chiriladi va quyidagi ro‘yxatga kiritiladi.</i>"
             )
             round_st["base_text"] = msg_text
-            sent_msg = await app.bot.send_message(chat_id, msg_text)
+            sent_msg = await app.bot.send_message(chat_id, msg_text, parse_mode="HTML")
             round_st["message_id"] = sent_msg.message_id
             logger.info(f"Question #{q_num} posted in {chat_id}.")
             asyncio.create_task(evaluate_initial_window(app, chat_id, q_num))
@@ -840,7 +882,7 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Failed to delete user answer message: {e}")
 
-    user_name = user.first_name or "O‘yinchi"
+    user_name = user.first_name or "Player"
     raw_choice = match.group(1)
     choice = CYRILLIC_TO_LATIN.get(raw_choice, raw_choice).upper()
 
@@ -898,7 +940,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     )
                     
                     correct_letter = target_round["correct"]
-                    ans_text = target_round["options"].get(correct_letter, "")
+                    ans_text = target_round["options_en"].get(correct_letter, "")
+                    ans_uz_text = target_round["options_uz"].get(correct_letter, "")
+                    display_uz = f" ({ans_uz_text})" if ans_uz_text and ans_uz_text != ans_text else ""
                     
                     izoh_formatted = format_izoh_block(
                         target_round['explanation'], 
@@ -908,9 +952,9 @@ async def handle_message(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     rating_formatted = format_leaderboard_block(leaderboard_str)
 
                     reply = (
-                        f"🎯 <b>TO‘G‘RI JAVOB!</b>\n\n"
-                        f"⚡ <b>G‘olib:</b> {escape_tg_html(winner_name)} (+10 ball!)\n"
-                        f"✅ <b>Javob:</b> {correct_letter}) {escape_tg_html(ans_text)}\n"
+                        f"🎯 <b>CORRECT ANSWER!</b>\n\n"
+                        f"⚡ <b>Winner:</b> {escape_tg_html(winner_name)} (+10 points!)\n"
+                        f"✅ <b>Answer:</b> {correct_letter}) {escape_tg_html(ans_text)}{escape_tg_html(display_uz)}\n"
                         f"{izoh_formatted}\n\n"
                         f"{rating_formatted}\n\n"
                         f"⏳ Keyingi savol 5 daqiqadan so‘ng chiqadi."
@@ -960,9 +1004,10 @@ async def cmd_transcribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "temperature": (None, "0.0")
         }
 
-        res = requests.post("https://api.groq.com/openai/v1/audio/transcriptions", headers=headers, files=files, timeout=30)
-        data = res.json()
-        transcript = data.get("text", "").strip()
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.post("https://api.groq.com/openai/v1/audio/transcriptions", headers=headers, files=files)
+            data = res.json()
+            transcript = data.get("text", "").strip()
 
         if transcript:
             reply_text = f"🗣 <b>OVOZLI XABAR MATNI:</b>\n\n<i>\"{escape_tg_html(transcript)}\"</i>"
@@ -974,7 +1019,7 @@ async def cmd_transcribe(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Error transcribing voice: {e}")
         await status_msg.edit_text("⚠️ Ovozni tahlil qilishda xatolik yuz berdi.")
 
-# --- Commands ---
+# --- Admin & Player Commands ---
 async def cmd_test(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     if chat_id not in GROUP_CHAT_IDS:
@@ -1010,7 +1055,7 @@ async def cmd_myrank(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not user:
         return
 
-    name = user.first_name or "O‘yinchi"
+    name = user.first_name or "Player"
     scores = get_chat_scores(chat_id)
     sorted_scores = sorted(scores.items(), key=lambda x: x[1], reverse=True)
     
@@ -1098,7 +1143,7 @@ async def cmd_set_score(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
 
     target_user = update.message.reply_to_message.from_user
-    target_name = target_user.first_name or "O‘yinchi"
+    target_name = target_user.first_name or "Player"
 
     chat_scores = get_chat_scores(chat_id)
     chat_scores[target_name] = new_score
@@ -1144,7 +1189,7 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
     round_st["active"] = False
     correct_letter = round_st["correct"]
-    ans_text = round_st["options"].get(correct_letter, "")
+    ans_text = round_st["options_en"].get(correct_letter, "")
     explanation = round_st["explanation"]
     detailed = round_st["detailed_explanation"]
     source = round_st.get("source", "")
@@ -1162,7 +1207,7 @@ async def cmd_skip(update: Update, context: ContextTypes.DEFAULT_TYPE):
     izoh_formatted = format_izoh_block(explanation, detailed, source)
     reply = (
         f"⏭ <b>SAVOL O'TKAZIB YUBORILDI</b> (Admin tomonidan)\n\n"
-        f"✅ <b>To‘g‘ri javob:</b> {correct_letter}) {escape_tg_html(ans_text)}\n"
+        f"✅ <b>Correct Answer:</b> {correct_letter}) {escape_tg_html(ans_text)}\n"
         f"{izoh_formatted}\n\n"
         f"⏳ Keyingi savol 5 daqiqadan so‘ng yoki /test orqali chiqadi."
     )
