@@ -51,15 +51,16 @@ GLOBAL_USER_IDS = {int(x) for x in os.getenv("GLOBAL_USER_IDS", "").replace(" ",
 GLOBAL_USER_NAME = os.getenv("GLOBAL_USER_NAME", "biloliddin")
 
 GROQ_URL = "https://api.groq.com/openai/v1/chat/completions"
+# Each model has its OWN free-tier budget (8K tokens/min, 200K tokens/day), so spreading
+# work across three models triples what the bot can do per day.
 GEN_MODELS = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
-CHECK_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b"]
-TRANSLATE_MODELS = ["openai/gpt-oss-120b", "qwen/qwen3.8-27b", "openai/gpt-oss-20b"]
+CHECK_MODELS = ["openai/gpt-oss-120b", "openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
+ROAST_MODELS = ["openai/gpt-oss-20b", "qwen/qwen3.8-27b"]
 
 QUESTION_INTERVAL_MIN = 5          # a new question every 5 minutes
 INITIAL_WINDOW_SECONDS = 30        # podium window (🥇10 🥈5 🥉3)
 EXPIRE_CLEANUP_SECONDS = 60        # question + reveal deleted 1 minute after the reveal
-MAX_GEN_ATTEMPTS = 4               # rejected questions are regenerated up to this many times
-HISTORY_KEEP = 60                  # remembered questions (for "don't repeat")
+HISTORY_KEEP = 400                 # remembered posted questions (≈ 1.5 days) — never repeated
 
 SCORES_FILE = "scores.json"
 STATE_FILE = "state.json"
@@ -101,7 +102,7 @@ def _save_json(path, data):
 STATE = _load_json(STATE_FILE, {})
 STATE.setdefault("next_q", 1)
 STATE.setdefault("history", [])
-STATE.setdefault("deck", [])
+STATE.pop("deck", None)
 STATE.setdefault("pins", {})
 
 
@@ -532,64 +533,160 @@ BANNED_TOPICS = (
 )
 
 
-def draw_category(q_num: int) -> dict:
-    if q_num % 4 == 0:
-        return ISLAMIC_CATEGORY
-    deck = STATE.setdefault("deck", [])
-    deck[:] = [d for d in deck if d in CAT_BY_ID and d != "islamic"]
-    if not deck:
-        new_deck = [c["id"] for c in CATEGORIES for _ in range(c["weight"])]
-        for _ in range(30):  # try to avoid the same category twice in a row
+ISLAMIC_WEIGHT = 7  # ≈ every 4th question in the stock is Islamic
+_DECK = []
+
+
+def draw_category() -> dict:
+    """Shuffled weighted deck: every category appears before any repeats."""
+    if not _DECK:
+        new_deck = [c["id"] for c in CATEGORIES for _ in range(c["weight"])] + ["islamic"] * ISLAMIC_WEIGHT
+        for _ in range(50):
             random.shuffle(new_deck)
             if all(a != b for a, b in zip(new_deck, new_deck[1:])):
                 break
-        deck.extend(new_deck)
-    cat_id = deck.pop(0)
-    save_state()
-    return CAT_BY_ID[cat_id]
+        _DECK.extend(new_deck)
+    return CAT_BY_ID[_DECK.pop(0)]
 
 
 # =====================================================================
-# Groq helpers (blocking — always call through asyncio.to_thread)
+# Groq helpers — rate-limit aware (blocking: run via asyncio.to_thread)
+#
+# Free tier, per model: 8,000 tokens/minute and 200,000 tokens/day.
+# Every call reserves (prompt + max_tokens) in a 60-second window so we
+# never send a request Groq would refuse, and a 429 puts the model on
+# cooldown for exactly as long as Groq says.
 # =====================================================================
+MODEL_TPM_BUDGET = 7600
+RATE_LOCK = threading.Lock()
+MODEL_WINDOW = {}     # model -> [[ts, tokens], ...] in the last 60 s
+MODEL_COOLDOWN = {}   # model -> unix time when it may be used again
+USAGE_TODAY = {"day": "", "tokens": {}, "calls": 0, "rate_limited": 0}
+LAST_GROQ_ERROR = {"text": ""}
+
+
+def _est_tokens(text: str) -> int:
+    return len(text) // 3 + 60
+
+
+def _try_reserve(model: str, needed: int):
+    """Returns (entry, 0) if reserved, else (None, seconds_to_wait)."""
+    with RATE_LOCK:
+        now = time.time()
+        until = MODEL_COOLDOWN.get(model, 0)
+        if until > now:
+            return None, until - now
+        window = [e for e in MODEL_WINDOW.get(model, []) if now - e[0] < 61]
+        MODEL_WINDOW[model] = window
+        used = sum(e[1] for e in window)
+        if used + needed > MODEL_TPM_BUDGET:
+            oldest = min(e[0] for e in window) if window else now
+            return None, max(1.0, 61 - (now - oldest))
+        entry = [now, needed]
+        window.append(entry)
+        return entry, 0
+
+
+def _parse_retry_seconds(res, err_text: str) -> float:
+    try:
+        ra = res.headers.get("retry-after")
+        if ra:
+            return float(ra)
+    except Exception:
+        pass
+    m = re.search(r"try again in (?:(\d+)h)?(?:(\d+)m)?(?:([\d.]+)s)?", err_text)
+    if m and any(m.groups()):
+        h, mi, s = (float(x) if x else 0 for x in m.groups())
+        return h * 3600 + mi * 60 + s
+    return 60
+
+
+def _roll_day():
+    """Call with RATE_LOCK held."""
+    day = datetime.now(pytz.utc).strftime("%Y-%m-%d")
+    if USAGE_TODAY["day"] != day:
+        USAGE_TODAY.update({"day": day, "tokens": {}, "calls": 0, "rate_limited": 0})
+
+
+def _record_usage(model: str, tokens: int):
+    with RATE_LOCK:
+        _roll_day()
+        USAGE_TODAY["tokens"][model] = USAGE_TODAY["tokens"].get(model, 0) + tokens
+        USAGE_TODAY["calls"] += 1
+
+
+def _call_model(model, system, user, json_mode, temperature, max_tokens, reasoning):
+    """Returns (content | None, status) with status in ok / rate / error."""
+    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
+    for use_json in ([True, False] if json_mode else [False]):
+        payload = {
+            "model": model,
+            "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+        }
+        if use_json:
+            payload["response_format"] = {"type": "json_object"}
+        if reasoning and model.startswith("openai/gpt-oss"):
+            payload["reasoning_effort"] = reasoning
+        try:
+            res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=90)
+            data = res.json()
+        except Exception as e:
+            LAST_GROQ_ERROR["text"] = f"{model}: {e}"
+            logger.warning(f"Groq {model} request failed: {e}")
+            return None, "error"
+        if res.status_code == 429:
+            err = str(data.get("error", data))
+            wait = _parse_retry_seconds(res, err)
+            with RATE_LOCK:
+                MODEL_COOLDOWN[model] = time.time() + max(wait, 10)
+                _roll_day()
+                USAGE_TODAY["rate_limited"] += 1
+            LAST_GROQ_ERROR["text"] = f"{model}: rate limited for {int(wait)}s"
+            logger.warning(f"Groq {model} rate-limited for {int(wait)}s: {err[:160]}")
+            return None, "rate"
+        if "error" in data:
+            err = str(data["error"])
+            LAST_GROQ_ERROR["text"] = f"{model}: {err[:150]}"
+            logger.warning(f"Groq {model} error: {err[:200]}")
+            if use_json and ("response_format" in err or "json" in err.lower()):
+                continue  # retry this model without JSON mode
+            if "decommissioned" in err or "does not exist" in err or "model_not_found" in err:
+                with RATE_LOCK:
+                    MODEL_COOLDOWN[model] = time.time() + 6 * 3600
+            return None, "error"
+        _record_usage(model, int((data.get("usage") or {}).get("total_tokens") or 0))
+        try:
+            content = data["choices"][0]["message"]["content"] or ""
+        except Exception:
+            return None, "error"
+        content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+        return (content, "ok") if content else (None, "error")
+    return None, "error"
+
+
 def groq_chat(system: str, user: str, *, models, json_mode=True, temperature=0.7,
-              max_tokens=4000, reasoning="medium"):
+              max_tokens=3000, reasoning="medium", max_wait=0):
+    """Tries the models in order, skipping any that are out of budget.
+    With max_wait > 0 it sleeps until a model frees up (used by the background worker)."""
     if not GROQ_API_KEY:
         return None
-    headers = {"Authorization": f"Bearer {GROQ_API_KEY}", "Content-Type": "application/json"}
-    for model in models:
-        for use_json in ([True, False] if json_mode else [False]):
-            payload = {
-                "model": model,
-                "messages": [{"role": "system", "content": system}, {"role": "user", "content": user}],
-                "temperature": temperature,
-                "max_tokens": max_tokens,
-            }
-            if use_json:
-                payload["response_format"] = {"type": "json_object"}
-            if reasoning and model.startswith("openai/gpt-oss"):
-                payload["reasoning_effort"] = reasoning
-            try:
-                res = requests.post(GROQ_URL, headers=headers, json=payload, timeout=60)
-                data = res.json()
-            except Exception as e:
-                logger.warning(f"Groq {model} request failed: {e}")
-                break
-            if "error" in data:
-                err = str(data["error"])
-                logger.warning(f"Groq {model} error: {err[:200]}")
-                if use_json and ("response_format" in err or "json" in err.lower()):
-                    continue  # retry this model without JSON mode
-                break
-            try:
-                content = data["choices"][0]["message"]["content"] or ""
-            except Exception:
-                break
-            content = re.sub(r"<think>.*?</think>", "", content, flags=re.DOTALL).strip()
+    needed = _est_tokens(system + user) + max_tokens
+    deadline = time.time() + max_wait
+    while True:
+        shortest = None
+        for model in models:
+            entry, wait = _try_reserve(model, needed)
+            if entry is None:
+                shortest = wait if shortest is None else min(shortest, wait)
+                continue
+            content, status = _call_model(model, system, user, json_mode, temperature, max_tokens, reasoning)
             if content:
                 return content
-            break
-    return None
+        if shortest is None or time.time() + shortest > deadline:
+            return None
+        time.sleep(min(shortest, 65) + 1)
 
 
 def parse_json(raw):
@@ -624,6 +721,21 @@ def _clean_options(opts):
     return out
 
 
+def _clean_uz(raw):
+    if not isinstance(raw, dict):
+        return None
+    options = _clean_options(raw.get("options"))
+    question = str(raw.get("question", "")).strip()
+    if not options or not question:
+        return None
+    return {
+        "question": clip(question, 800),
+        "options": options,
+        "explanation": clip(raw.get("explanation", ""), 350),
+        "detailed": clip(raw.get("detailed", ""), 750),
+    }
+
+
 def _clean_question(raw):
     if not isinstance(raw, dict):
         return None
@@ -645,11 +757,18 @@ def _clean_question(raw):
         "explanation": explanation,
         "detailed": detailed if detailed and detailed != explanation else "",
         "source": clip(raw.get("source", ""), 80),
+        "uz": _clean_uz(raw.get("uz")),
     }
 
 
+STOPWORDS = {"which", "what", "when", "where", "while", "with", "that", "this", "these", "those", "from",
+             "have", "does", "your", "they", "their", "them", "there", "into", "about", "most", "more",
+             "would", "could", "should", "will", "were", "been", "being", "only", "than", "then", "each",
+             "people", "true", "following", "best", "after", "before", "other"}
+
+
 def _words(text):
-    return set(re.findall(r"[a-z]{4,}", (text or "").lower()))
+    return {w for w in re.findall(r"[a-z]{4,}", (text or "").lower()) if w not in STOPWORDS}
 
 
 def too_similar(question: str, recent: list) -> bool:
@@ -658,132 +777,138 @@ def too_similar(question: str, recent: list) -> bool:
         return False
     for old in recent:
         o = _words(old)
-        if o and len(w & o) / len(w | o) > 0.5:
+        if o and len(w & o) / len(w | o) > 0.45:
             return True
     return False
 
 
-LOGIC_RULES = """LOGIC RULES (the most important part):
-- The puzzle MUST be 100% solvable using ONLY the information written in the question. No outside knowledge, no word tricks, no hidden assumptions.
-- State every clue that is needed. After applying the clues exactly ONE option survives; each wrong option must break a specific clue.
-- Concrete and fair: use names, times, places, objects. Short sentences.
-- Before writing the JSON, solve your own puzzle step by step and confirm the answer is unique (do not include that work in the JSON).
-- "detailed" must walk through the deduction in 2-4 short steps, like "1) ... 2) ... 3) ...".
-- Question up to 70 words. Options max 6 words each."""
+LOGIC_RULES = """LOGIC questions (the most important rules):
+- 100% solvable using ONLY the information in the question. No outside knowledge, no word tricks, no hidden assumptions.
+- State every clue that is needed. After applying the clues exactly ONE option survives; each wrong option breaks a specific clue.
+- Concrete: names, times, places, objects. Short sentences. Up to 70 words.
+- Solve your own puzzle before writing it and make sure the answer is unique.
+- "detailed" walks through the deduction in 2-4 short steps: "1) ... 2) ... 3) ...".
+- Options max 6 words."""
 
-FACT_RULES = """FACT RULES:
-- Only well-established, checkable facts. No contested claims, no statistics that change every year, no country-specific laws.
-- Exactly ONE option is correct; the other three must be tempting but clearly wrong once you know the answer.
+FACT_RULES = """FACT questions:
+- Only well-established, checkable facts. No contested claims, no yearly-changing statistics, no country-specific laws.
+- Exactly ONE correct option; the other three tempting but clearly wrong once you know the answer.
 - Prefer things that are USEFUL in real life or make people say "wow, really?".
-- "detailed" (2-4 sentences): why the right answer is right AND why the most tempting wrong option is wrong.
-- Question max 30 words. Options max 8 words each (max 15 if the options are full statements)."""
+- "detailed" (2-3 sentences): why the right answer is right AND why the most tempting wrong option is wrong.
+- Max 30 words. Options max 8 words (max 15 if they are full statements)."""
+
+GEN_BATCH = 4
 
 
-def generate_question(cat, angle, fmt, difficulty, recent):
-    recent_block = "\n".join(f"- {clip(r, 120)}" for r in recent[:25]) or "- (none yet)"
-    fmt_line = f"FORMAT: {fmt}\n" if fmt else ""
-    rules = LOGIC_RULES if cat["kind"] == "logic" else FACT_RULES
-    extra = ""
-    if cat["id"] == "islamic":
-        extra = "- Be respectful and accurate. Only facts all mainstream scholars agree on. No disputed fiqh rulings. Use ﷺ after the Prophet's name.\n"
-    prompt = f"""Write ONE multiple-choice question for a fun Telegram quiz game. Players are smart young adults in Uzbekistan who are also practising their English.
+def make_slot():
+    cat = draw_category()
+    return {
+        "cat": cat,
+        "angle": random.choice(cat["angles"]),
+        "fmt": random.choice(FACT_FORMATS) if cat["kind"] == "fact" else None,
+        "difficulty": random.choices(["medium", "hard", "easy"], weights=[5, 3, 1])[0],
+    }
 
-CATEGORY: {cat['label']}
-ANGLE: {angle}
-{fmt_line}DIFFICULTY: {difficulty}
-Random seed: {random.randint(10000, 99999)}
 
-GOAL: players should finish with "aha, clever!" or "wow, I didn't know that — that's useful". Never boring textbook trivia.
-LANGUAGE: clear, simple English (B1-B2 level). Rare words only if the question is about that word.
+def generate_batch(slots, recent):
+    slot_lines = []
+    for i, s in enumerate(slots, start=1):
+        kind = "LOGIC" if s["cat"]["kind"] == "logic" else "FACT"
+        line = f"{i}. [{kind}] {s['cat']['label']} — {s['angle']}"
+        if s["fmt"]:
+            line += f" FORMAT: {s['fmt']}"
+        line += f" DIFFICULTY: {s['difficulty']}."
+        if s["cat"]["id"] == "islamic":
+            line += " Respectful; only facts all mainstream scholars agree on; no disputed fiqh; write ﷺ after the Prophet's name."
+        slot_lines.append(line)
+    recent_block = "\n".join(f"- {clip(r, 70)}" for r in recent[:30]) or "- (none)"
+    prompt = f"""Write {len(slots)} multiple-choice questions for a fun Telegram quiz played by smart young adults in Uzbekistan who are practising English. One question per slot, in order:
 
-{rules}
+{chr(10).join(slot_lines)}
 
-GENERAL RULES:
-- Never refer to options by their letter in the explanation (options get shuffled). Refer to them by their content.
-- No "All of the above" / "None of the above" / "Both" options.
-- "explanation": ONE punchy sentence.
-- "source": a short real reference type (e.g. "Red Cross first-aid guide", "Kahneman - Thinking, Fast and Slow", "Classic logic puzzle"). Never invent a specific study.
-{extra}- Do NOT repeat or closely resemble these recent questions:
+GOAL: "aha, clever!" or "wow, useful, I didn't know that". Never boring textbook trivia. Every question must be about a DIFFERENT idea.
+ENGLISH: clear, simple (B1-B2).
+
+{LOGIC_RULES}
+
+{FACT_RULES}
+
+GENERAL:
+- Never refer to options by letter in explanations (options get shuffled).
+- No "All/None/Both of the above".
+- "explanation": ONE punchy sentence. "source": short real reference type (e.g. "Red Cross first-aid guide", "Classic logic puzzle"); never invent a study.
+- "uz": a natural, fluent Uzbek translation (Latin script, o‘ and g‘) of question, options, explanation and detailed. Not word-for-word. Same option letters. If the question is about an English word or grammar, keep the English in quotes and explain in Uzbek.
+- Do NOT repeat or resemble these recent questions:
 {recent_block}
-- Avoid these worn-out topics: {BANNED_TOPICS}.
+- Avoid worn-out topics: {BANNED_TOPICS}. Also avoid: SMS/bank-code scams, the three mislabelled boxes, the origin of the word "algorithm", coin-flip streaks, the Rule of 72.
 
 Return ONLY JSON:
-{{"question": "...", "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}}, "correct": "A", "explanation": "...", "detailed": "...", "source": "..."}}"""
+{{"questions": [{{"slot": 1, "question": "...", "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}}, "correct": "A", "explanation": "...", "detailed": "...", "source": "...", "uz": {{"question": "...", "options": {{"A": "...", "B": "...", "C": "...", "D": "..."}}, "explanation": "...", "detailed": "..."}}}}]}}"""
     raw = groq_chat(
-        "You are a world-class quiz writer and puzzle designer. You return only valid JSON.",
-        prompt, models=GEN_MODELS, temperature=0.9, reasoning="medium",
+        "You are a world-class quiz writer, puzzle designer and English-Uzbek translator. You return only valid JSON.",
+        prompt, models=GEN_MODELS, temperature=0.9, max_tokens=4800, reasoning="low", max_wait=180,
     )
-    return _clean_question(parse_json(raw))
+    data = parse_json(raw)
+    if not isinstance(data, dict) or not isinstance(data.get("questions"), list):
+        return None
+    out = []
+    for idx, item in enumerate(data["questions"]):
+        q = _clean_question(item)
+        if not q:
+            continue
+        try:
+            slot_no = int(item.get("slot", idx + 1)) - 1
+        except (TypeError, ValueError):
+            slot_no = idx
+        slot = slots[slot_no] if 0 <= slot_no < len(slots) else slots[min(idx, len(slots) - 1)]
+        q["cat"] = slot["cat"]["id"]
+        q["kind"] = slot["cat"]["kind"]
+        q["label"] = slot["cat"]["label"]
+        out.append(q)
+    return out
 
 
-def verify_question(q, cat):
-    """A second AI solves the question blind. Returns (ok, reason)."""
-    opts = "\n".join(f"{L}) {q['options'][L]}" for L in "ABCD")
-    kind_rule = (
-        "This is a logic puzzle: it must be solvable ONLY from the stated information, with exactly one possible answer."
-        if cat["kind"] == "logic"
-        else "This is a fact question: the facts must be accurate and well established, and exactly one option must be correct."
-    )
-    prompt = f"""Solve this quiz question yourself. You are NOT told the intended answer.
+def verify_batch(qs):
+    """A second AI solves every question blind. Returns list[(ok, reason)] or None if no budget."""
+    blocks = []
+    for i, q in enumerate(qs, start=1):
+        kind = "LOGIC (must be solvable from the text alone)" if q["kind"] == "logic" else "FACT (facts must be accurate)"
+        opts = "\n".join(f"{L}) {q['options'][L]}" for L in "ABCD")
+        blocks.append(f"#{i} [{kind}]\n{q['question']}\n{opts}")
+    prompt = f"""Solve each quiz question yourself. You are NOT told the intended answers.
 
-QUESTION: {q['question']}
-{opts}
+{chr(10).join(blocks)}
 
-{kind_rule}
-Be strict. Reject it if two options could be argued as correct, if information is missing, if it relies on a trick of wording, or if any fact is wrong.
+For each: give your answer, and set ok=false if two options could be argued correct, if information is missing, if it relies on a wording trick, or if any fact is wrong. Be strict.
 
-Return ONLY JSON:
-{{"answer": "A|B|C|D", "exactly_one_correct": true, "accurate": true, "clear": true, "problem": "short description or empty"}}"""
+Return ONLY JSON: {{"results": [{{"n": 1, "answer": "A", "ok": true, "problem": ""}}]}}"""
     raw = groq_chat(
         "You are a strict quiz fact-checker and logic verifier. You return only valid JSON.",
-        prompt, models=CHECK_MODELS, temperature=0.1, reasoning="high", max_tokens=6000,
+        prompt, models=CHECK_MODELS, temperature=0.1, max_tokens=4000, reasoning="medium", max_wait=180,
     )
     data = parse_json(raw)
-    if not isinstance(data, dict):
-        logger.warning("Checker unavailable — accepting question unverified.")
-        return True, "unverified"
-    answer = str(data.get("answer", "")).strip().upper()[:1]
-    if answer != q["correct"]:
-        return False, f"checker answered {answer}, writer said {q['correct']} ({data.get('problem', '')})"
-    for flag in ("exactly_one_correct", "accurate", "clear"):
-        if data.get(flag) is False:
-            return False, f"{flag}=false ({data.get('problem', '')})"
-    return True, "ok"
-
-
-def translate_to_uzbek(q):
-    payload = {
-        "question": q["question"],
-        "options": q["options"],
-        "explanation": q["explanation"],
-        "detailed": q["detailed"],
-    }
-    prompt = f"""Translate this quiz into natural, fluent Uzbek (Latin script, use o‘ and g‘).
-Rules:
-- Natural Uzbek, not word-for-word. Keep names, numbers and units.
-- If the question is about an English word, idiom or grammar, keep the English word/sentence in quotes and explain in Uzbek.
-- Keep the same JSON keys and the same option letters.
-
-{json.dumps(payload, ensure_ascii=False)}
-
-Return ONLY JSON with keys: question, options (A-D), explanation, detailed."""
-    raw = groq_chat(
-        "You are a professional English-Uzbek translator. You return only valid JSON.",
-        prompt, models=TRANSLATE_MODELS, temperature=0.3, reasoning="low",
-    )
-    data = parse_json(raw)
-    if not isinstance(data, dict):
+    if not isinstance(data, dict) or not isinstance(data.get("results"), list):
         return None
-    options = _clean_options(data.get("options"))
-    question = str(data.get("question", "")).strip()
-    if not options or not question:
-        return None
-    return {
-        "question": clip(question, 800),
-        "options": options,
-        "explanation": clip(data.get("explanation", ""), 350),
-        "detailed": clip(data.get("detailed", ""), 750),
-    }
+    by_n = {}
+    for r in data["results"]:
+        try:
+            by_n[int(r.get("n"))] = r
+        except (TypeError, ValueError):
+            continue
+    out = []
+    for i, q in enumerate(qs, start=1):
+        r = by_n.get(i)
+        if not r:
+            out.append((False, "not checked"))
+            continue
+        ans = str(r.get("answer", "")).strip().upper()[:1]
+        if ans != q["correct"]:
+            out.append((False, f"checker said {ans}, writer said {q['correct']} ({r.get('problem', '')})"))
+        elif r.get("ok") is False:
+            out.append((False, f"flagged: {r.get('problem', '')}"))
+        else:
+            out.append((True, "ok"))
+    return out
 
 
 def _leading_number(text):
@@ -910,56 +1035,109 @@ OFFLINE_BACKUP_QUESTIONS = [
 
 
 def offline_question(recent):
-    pool = [q for q in OFFLINE_BACKUP_QUESTIONS if q["question"][:200] not in recent] or OFFLINE_BACKUP_QUESTIONS
-    return shuffle_options(copy.deepcopy(random.choice(pool)))
+    """Backup questions are used at most once per HISTORY_KEEP questions — never repeated."""
+    pool = [q for q in OFFLINE_BACKUP_QUESTIONS if q["question"][:200] not in recent]
+    if not pool:
+        return None
+    q = copy.deepcopy(random.choice(pool))
+    q["cat"] = "offline"
+    return shuffle_options(q)
 
 
-def build_question(cat, recent):
-    """Blocking: generate → de-duplicate → blind-verify → translate → shuffle."""
-    for attempt in range(1, MAX_GEN_ATTEMPTS + 1):
-        angle = random.choice(cat["angles"])
-        fmt = random.choice(FACT_FORMATS) if cat["kind"] == "fact" else None
-        difficulty = random.choices(["medium", "hard", "easy"], weights=[5, 3, 1])[0]
-        q = generate_question(cat, angle, fmt, difficulty, recent)
-        if not q:
-            logger.info(f"[{cat['id']}] attempt {attempt}: generation failed")
-            continue
-        if too_similar(q["question"], recent):
-            logger.info(f"[{cat['id']}] attempt {attempt}: too similar to a recent question")
-            continue
-        ok, why = verify_question(q, cat)
+# =====================================================================
+# Question stock — a background worker keeps BANK_TARGET verified
+# questions ready (saved to bank.json, survives restarts).
+# =====================================================================
+BANK_FILE = "bank.json"
+BANK_TARGET = 40
+BANK_LOCK = threading.Lock()
+BANK = _load_json(BANK_FILE, [])
+PENDING = []  # generated but not yet verified (verification ran out of budget)
+BANK_STATS = {"added": 0, "rejected": 0}
+
+
+def save_bank():
+    with BANK_LOCK:
+        snapshot = list(BANK)
+    _save_json(BANK_FILE, snapshot)
+
+
+def recent_questions():
+    with BANK_LOCK:
+        banked = [q["question"] for q in BANK]
+    return list(STATE["history"]) + banked
+
+
+def refill_once() -> int:
+    """Blocking. Generates + verifies one batch. Returns how many questions were added."""
+    if PENDING:
+        cands = PENDING[:]
+        PENDING.clear()
+    else:
+        recent = recent_questions()
+        cands = generate_batch([make_slot() for _ in range(GEN_BATCH)], recent)
+        if not cands:
+            return 0
+        kept = []
+        for q in cands:
+            if too_similar(q["question"], recent + [k["question"] for k in kept]):
+                logger.info(f"Dropped (too similar): {q['question'][:70]}")
+                continue
+            kept.append(q)
+        cands = kept
+        if not cands:
+            return 0
+    results = verify_batch(cands)
+    if results is None:
+        PENDING.extend(cands)  # try verifying again later instead of wasting them
+        return 0
+    added = 0
+    for q, (ok, why) in zip(cands, results):
         if not ok:
-            logger.info(f"[{cat['id']}] attempt {attempt}: rejected — {why} | {q['question'][:80]}")
+            BANK_STATS["rejected"] += 1
+            logger.info(f"Rejected [{q['cat']}] {why} | {q['question'][:80]}")
             continue
-        q["uz"] = translate_to_uzbek(q)
-        q["label"] = cat["label"]
-        logger.info(f"[{cat['id']}] accepted ({why}): {q['question'][:80]}")
-        return shuffle_options(q)
-    logger.error("All generation attempts failed — using an offline question.")
-    return offline_question(recent)
+        with BANK_LOCK:
+            BANK.append(shuffle_options(q))
+        BANK_STATS["added"] += 1
+        added += 1
+        logger.info(f"Banked [{q['cat']}] {q['question'][:80]}")
+    if added:
+        save_bank()
+    return added
 
 
-# Pre-generate the next question in the background so posting is instant.
-PREFETCH = {"task": None, "q_num": None}
+async def bank_worker():
+    try:
+        while True:
+            try:
+                if len(BANK) < BANK_TARGET:
+                    added = await asyncio.to_thread(refill_once)
+                    await asyncio.sleep(5 if added else 60)
+                else:
+                    await asyncio.sleep(60)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                logger.error(f"Bank worker error: {e}", exc_info=True)
+                await asyncio.sleep(60)
+    except asyncio.CancelledError:
+        logger.info("Bank worker cancelled.")
 
 
-def start_prefetch(q_num: int):
-    cat = draw_category(q_num)
-    recent = list(STATE["history"])
-    PREFETCH["q_num"] = q_num
-    PREFETCH["task"] = asyncio.create_task(asyncio.to_thread(build_question, cat, recent))
-
-
-async def get_question(q_num: int):
-    task = PREFETCH.get("task")
-    if task and PREFETCH.get("q_num") == q_num:
-        PREFETCH["task"] = None
-        try:
-            return await task
-        except Exception as e:
-            logger.error(f"Prefetch failed: {e}")
-    cat = draw_category(q_num)
-    return await asyncio.to_thread(build_question, cat, list(STATE["history"]))
+def take_question(q_num: int):
+    """Every 4th question is Islamic when the stock has one."""
+    want_islamic = q_num % 4 == 0
+    history = list(STATE["history"])
+    with BANK_LOCK:
+        # drop anything that became too similar to what was posted since it was banked
+        BANK[:] = [q for q in BANK if not too_similar(q["question"], history)]
+        if not BANK:
+            return None
+        idx = next((i for i, q in enumerate(BANK) if (q.get("cat") == "islamic") == want_islamic), 0)
+        q = BANK.pop(idx)
+    save_bank()
+    return q
 
 
 # =====================================================================
@@ -1059,10 +1237,12 @@ WRONG GUESSES:
 
 Write ONE short funny line per wrong option. Mention the players by name and, in a clever way, show WHY their pick was wrong (use the real fact or the logic of the puzzle).
 Playful teasing only: nothing about looks, family, religion or nationality, no swearing. Simple English. No heading or intro. Max 2 sentences per line."""
-    raw = groq_chat(
-        "You are a funny, clever quiz host. Reply with plain text only.",
-        prompt, models=GEN_MODELS, json_mode=False, temperature=0.9, max_tokens=1500, reasoning="low",
-    )
+    raw = None
+    if len(BANK) >= 10:  # questions come first — roasts only use spare budget
+        raw = groq_chat(
+            "You are a funny, clever quiz host. Reply with plain text only.",
+            prompt, models=ROAST_MODELS, json_mode=False, temperature=0.9, max_tokens=700, reasoning="low",
+        )
     if raw:
         body = esc(clip(raw, 900))
     else:
@@ -1295,7 +1475,12 @@ async def post_question(app):
                     logger.error(f"Error closing round in {chat_id}: {e}", exc_info=True)
 
         q_num = STATE["next_q"]
-        q = await get_question(q_num)
+        q = take_question(q_num) or offline_question(STATE["history"])
+        if not q:
+            logger.warning("Question stock is empty and all backups were used recently — skipping this round.")
+            return
+        if q.get("cat") == "offline":
+            logger.warning("Question stock empty — using a backup question.")
         STATE["next_q"] = q_num + 1
         STATE["history"].insert(0, q["question"][:200])
         del STATE["history"][HISTORY_KEEP:]
@@ -1314,8 +1499,6 @@ async def post_question(app):
             except Exception as e:
                 ROUND_STATES[chat_id] = create_empty_round()
                 logger.error(f"Could not post question to {chat_id}: {e}")
-
-        start_prefetch(STATE["next_q"])
 
 
 # =====================================================================
@@ -1575,7 +1758,15 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         return
     wait = seconds_until_next_drop()
     alive = scheduler_task is not None and not scheduler_task.done()
-    prefetch_ready = bool(PREFETCH.get("task") and PREFETCH["task"].done())
+    now = time.time()
+    with RATE_LOCK:
+        usage = dict(USAGE_TODAY["tokens"])
+        cooling = {m: int(t - now) for m, t in MODEL_COOLDOWN.items() if t > now}
+    usage_lines = "\n".join(
+        f"   • {m.split('/')[-1]}: {usage.get(m, 0):,} / 200,000"
+        + (f" (paused {cooling[m] // 60}m)" if m in cooling else "")
+        for m in dict.fromkeys(GEN_MODELS + CHECK_MODELS)
+    )
     rs = get_round_state(update.effective_chat.id)
     msg = (
         f"🤖 BOT STATUS\n\n"
@@ -1583,7 +1774,10 @@ async def cmd_status(update: Update, context: ContextTypes.DEFAULT_TYPE):
         f"🕒 Tashkent time: {datetime.now(TASHKENT_TZ).strftime('%H:%M:%S')}\n"
         f"⚙️ Scheduler: {'🟢 running' if alive else '🔴 stopped'}\n"
         f"⏳ Next question in: {wait // 60} min {wait % 60} s (#{STATE['next_q']:07d})\n"
-        f"🧠 Next question ready: {'yes' if prefetch_ready else 'generating...'}\n"
+        f"📦 Questions in stock: {len(BANK)} / {BANK_TARGET} (waiting check: {len(PENDING)})\n"
+        f"✅ Made / ❌ rejected since restart: {BANK_STATS['added']} / {BANK_STATS['rejected']}\n"
+        f"🔋 Groq tokens today (UTC):\n{usage_lines}\n"
+        f"⚠️ Last Groq problem: {LAST_GROQ_ERROR['text'] or 'none'}\n"
         f"🎯 Active question here: {'yes' if rs['active'] else 'no'}\n"
         f"🌐 Global player by ID: {'yes' if GLOBAL_USER_IDS else 'no (name fallback)'}"
     )
@@ -1644,6 +1838,7 @@ async def cmd_cusslist(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # =====================================================================
 scheduler_task = None
 cleaner_task = None
+worker_task = None
 
 
 async def scheduler(app):
@@ -1665,18 +1860,18 @@ async def scheduler(app):
 
 
 async def on_startup(app):
-    global scheduler_task, cleaner_task
+    global scheduler_task, cleaner_task, worker_task
     if not GLOBAL_USER_IDS:
         logger.warning("GLOBAL_USER_IDS is not set — global player is matched by first name (unsafe).")
     await recover_from_pins(app.bot)
-    start_prefetch(STATE["next_q"])
+    worker_task = asyncio.create_task(bank_worker())
     scheduler_task = asyncio.create_task(scheduler(app))
     cleaner_task = asyncio.create_task(message_cleaner_task(app.bot))
 
 
 async def on_shutdown(app):
     logger.info("Cancelling background tasks...")
-    for task in (scheduler_task, cleaner_task):
+    for task in (scheduler_task, cleaner_task, worker_task):
         if task and not task.done():
             task.cancel()
 
